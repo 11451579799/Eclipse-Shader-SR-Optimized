@@ -2,7 +2,9 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-#if   LPV_SIZE == 8
+#if !defined IS_LPV_ENABLED
+    const ivec3 workGroups = ivec3(0, 0, 0);
+#elif LPV_SIZE == 8
     const ivec3 workGroups = ivec3(32, 32, 32);
 #elif LPV_SIZE == 7
     const ivec3 workGroups = ivec3(16, 16, 16);
@@ -69,11 +71,12 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
         return blockId;
     }
 
-    void PopulateSharedIndex(const in ivec3 imgCoordOffset, const in ivec3 workGroupOffset, const in uint i) {
-        ivec3 pos = workGroupOffset + ivec3(i / lpvFlatten) % 10;
+    void populateSharedVoxel(ivec3 localPos, ivec3 workGroupOffset, ivec3 cameraOffset) {
+        int index = getSharedIndex(localPos);
+        ivec3 pos = workGroupOffset + localPos;
 
-        lpvSharedData[i] = GetLpvValue(imgCoordOffset + pos);
-        voxelSharedData[i] = GetVoxelBlock(pos);
+        lpvSharedData[index] = GetLpvValue(cameraOffset + pos);
+        voxelSharedData[index] = GetVoxelBlock(pos);
     }
 
     vec4 sampleShared(ivec3 pos, int mask_index) {
@@ -126,14 +129,25 @@ void main() {
         uvec3 chunkPos = gl_WorkGroupID * gl_WorkGroupSize;
         if (any(greaterThanEqual(chunkPos, LpvSize3))) return;
 
-        // Pre-populate shared-memory buffer for improved sampling performance
-        uint i = uint(gl_LocalInvocationIndex) * 2u;
-        if (i < 1000u) {
-            ivec3 imgCoordOffset = ivec3(floor(cameraPosition) - floor(previousCameraPosition));
-            ivec3 workGroupOffset = ivec3(gl_WorkGroupID * gl_WorkGroupSize) - 1;
+        ivec3 cameraOffset = ivec3(floor(cameraPosition) - floor(previousCameraPosition));
+        ivec3 workGroupOffset = ivec3(chunkPos) - 1;
+        populateSharedVoxel(ivec3(gl_LocalInvocationID) + 1, workGroupOffset, cameraOffset);
 
-            PopulateSharedIndex(imgCoordOffset, workGroupOffset, i);
-            PopulateSharedIndex(imgCoordOffset, workGroupOffset, i + 1u);
+        // The six-neighbor stencil reads the faces around the group.
+        int lane = int(gl_LocalInvocationIndex);
+        if (lane < 6 * 64) {
+            int face = lane / 64;
+            int edge = (face % 2) * 9;
+            ivec2 tile = ivec2(lane % 8, (lane / 8) % 8) + 1;
+            ivec3 facePos;
+            if (face < 2) {
+                facePos = ivec3(edge, tile);
+            } else if (face < 4) {
+                facePos = ivec3(tile.x, edge, tile.y);
+            } else {
+                facePos = ivec3(tile, edge);
+            }
+            populateSharedVoxel(facePos, workGroupOffset, cameraOffset);
         }
 
         barrier();
