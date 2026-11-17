@@ -35,8 +35,8 @@ uniform sampler2D colortex10;
 uniform sampler2D colortex11;
 uniform sampler2D colortex14;
 
-#if defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
-layout (rgba16f) uniform image2D cloudDepthTex;
+#if defined OVERWORLD_SHADER && defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
+layout (rg16f) uniform writeonly image2D cloudDepthTex;
 #endif
 
 in DATA {
@@ -827,6 +827,9 @@ void main() {
 
 	float cloudPlaneDistance = 0.0;
 	vec2 cloudDistance = vec2(0.0); // r = cumulus, g = cumulonimbus
+	#if defined OVERWORLD_SHADER && defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
+		bool writeCloudDepth = false;
+	#endif
 
 	vec4 VolumetricFog;
 	#ifdef OVERWORLD_SHADER
@@ -841,7 +844,7 @@ void main() {
 			VolumetricClouds = GetVolumetricClouds(viewPos0, BN, WrealSunVec, WmoonVec, directSunlightColor, directMoonlightColor, indirectLightColor, cloudPlaneDistance, cloudDistance);
 			
 			#if defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
-				imageStore(cloudDepthTex, ivec2(gl_FragCoord.xy), vec4(cloudDistance.r, cloudDistance.g, 0, 1));
+				writeCloudDepth = true;
 			#endif
 
 			#ifdef CAVE_FOG
@@ -959,7 +962,7 @@ void main() {
 				VolumetricClouds = GetVolumetricClouds(viewPos1, vec2(noise_1), WrealSunVec, WmoonVec, directSunlightColor, directMoonlightColor, indirectLightColor, cloudPlaneDistance, cloudDistance);
 
 				#if defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
-					imageStore(cloudDepthTex, ivec2(gl_FragCoord.xy), vec4(cloudDistance.r, cloudDistance.g, 0, 1));
+					writeCloudDepth = true;
 				#endif
 		
 				VolumetricFog = GetVolumetricFog(viewPos1, WsunVec, vec2(noise_1), directLightColor, indirectLight_fog, indirectLight, cloudPlaneDistance);
@@ -974,4 +977,10 @@ void main() {
 		
 		gl_FragData[1] = clamp(VolumetricFog, 0.0, 65000.0);
 	}
+
+	#if defined OVERWORLD_SHADER && defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
+		if (writeCloudDepth) {
+			imageStore(cloudDepthTex, ivec2(gl_FragCoord.xy), vec4(cloudDistance, 0.0, 1.0));
+		}
+	#endif
 }

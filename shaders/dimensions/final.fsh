@@ -23,7 +23,7 @@ uniform sampler2D shadowcolor1;
   #extension GL_NV_gpu_shader5 : enable
   #extension GL_ARB_shader_image_load_store : enable
 
-  layout (rgba16f) uniform image2D cloudDepthTex;
+  layout (rg16f) uniform readonly image2D cloudDepthTex;
 #endif
 
 in vec2 texcoord;
@@ -234,7 +234,7 @@ void main() {
     COLOR = vec3(ld(texture(depthtex1, texcoord*RENDER_SCALE).r));
   #endif
   #if DEBUG_VIEW == debug_CLOUDDEPTHTEX && defined CUMULONIMBUS_LIGHTNING && CUMULONIMBUS > 0
-    COLOR = imageLoad(cloudDepthTex, ivec2(gl_FragCoord.xy*VL_RENDER_SCALE*RENDER_SCALE)).rgb;
+    COLOR = vec3(imageLoad(cloudDepthTex, ivec2(gl_FragCoord.xy*VL_RENDER_SCALE*RENDER_SCALE)).rg, 0.0);
   #endif
 
   gl_FragColor.rgb = COLOR;

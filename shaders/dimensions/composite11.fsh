@@ -6,7 +6,9 @@
 
 in vec2 texcoord;
 
-const bool colortex5MipmapEnabled = true;
+#if DOF_QUALITY >= 0 && DOF_QUALITY < 5
+	const bool colortex5MipmapEnabled = true;
+#endif
 // uniform sampler2D colortex4;
 uniform sampler2D colortex5;
 uniform sampler2D colortex3;
@@ -212,7 +214,7 @@ vec3 blackbody(float Temp)
 void main() {
   /* RENDERTARGETS:7 */
 	float vignette = (1.5-dot(texcoord-0.5,texcoord-0.5)*2.);
-	vec3 col = texture(colortex5,texcoord).rgb;
+	vec3 col = textureLod(colortex5, texcoord, 0.0).rgb;
 
 	vec2 rodExposureDepth = rodExposureDepthSSBO;
 	rodExposureDepth.y = sqrt(rodExposureDepth.y/65000.0);
