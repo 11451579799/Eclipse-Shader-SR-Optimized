@@ -302,6 +302,10 @@ screen.Ambient_light = 环境光
 	option.HANDHELD_LIGHT_RANGE = 手持光源范围
 
     screen.SSRT_SETTINGS = SSRT 设置
+    screen.RTGI_SETTINGS = 实验性光追全局光照
+    option.RTGI = 漫反射反弹
+    option.RTGI_STRENGTH = 反弹光强度
+    option.RTGI_STEPS = 射线步数
 
     screen.Ambient_Colors =  环境光颜色
         option.AmbientLight_R = 红色量
@@ -1031,6 +1035,9 @@ screen.Shadows.comment = 根据您的喜好配置来自太阳的阴影。
 screen.Ambient_light.comment = 配置阴影处光照相关的设置
     option.AO_Strength.comment = 配置由 SSAO、GTAO 和 SSRT 产生的环境光遮蔽的强度。 §b这是什么？§r 环境光遮蔽是角落等处的小而柔和的阴影。
     option.GI_Strength.comment = 配置由 SSRT 产生的全局光照的强度。 §b这是什么？§r 这种情况下的全局光照特指光线从表面反弹到其他区域。
+    option.RTGI.comment = 为主世界可见的不透明表面追踪一次漫反射反弹。Photonics GI 生效的区域优先使用 Photonics。
+    option.RTGI_STRENGTH.comment = 调节漫反射反弹产生的间接光强度。
+    option.RTGI_STEPS.comment = 设置每条射线的深度采样步数。更高的步数可提高薄表面的命中率。
     option.HQ_SSGI.comment = 切换长距离屏幕空间光线追踪。这将允许 SSRT 光照从它反弹/投射阴影的地方在场景中传播得更远。 §a性能消耗：§r 非常高
     option.Hand_Held_lights.comment = 切换着色器端的手持光源。 §a性能消耗：§r 非常低
     option.SKY_CONTRIBUTION_IN_SSRT.comment = 允许 SSRT 考虑整个天空和雾，为阴影区域创建高质量的光照。这可能会引入更多噪点。 §a性能消耗：§r 中

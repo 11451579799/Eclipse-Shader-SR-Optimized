@@ -71,6 +71,12 @@ Note: With default settings there is at least one guaranteed eclipse per ingame 
  - click the `green "code" button` and select `"download zip"`.
  - once the zip file finishes downloading, install it like a normal shader. you do NOT need to unzip/extract/decompress.
 
+## Experimental RTGI
+
+Enable **Ambient Light → Experimental RTGI → Diffuse Bounce** in Iris shader pack settings. The option is off by default. It adds diffuse color bounce between visible opaque surfaces in the Overworld and works at the internal render scale, before Super Resolution upscales the image.
+
+The compute pass casts one cosine-weighted ray per 2×2 internal pixels, up to 12 blocks. Its default budget is 12 depth steps and up to two refinement samples per ray. History is reprojected using depth and normals, and the result is upsampled with an edge-aware filter. Receivers fade out from 40 to 48 blocks in view depth. Surfaces outside the screen cannot contribute to this pass. Eclipse's ambient lighting and LPV provide the broader lighting, and Photonics GI takes priority where it is active.
+
 # Incompatible Mods / Mods with issues
 - OptiFine
 - Iris/Oculus requires at least version 1.6.11 of the mod
