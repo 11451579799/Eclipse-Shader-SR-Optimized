@@ -3,6 +3,14 @@ layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 const ivec3 workGroups = ivec3(1, 1, 1);
 
+#if WATER_INTERACTION == 2
+    #include "/lib/water_sim_dispatch.glsl"
+
+    layout(std430, binding = 5) writeonly buffer WaterSimDispatch {
+        uvec3 waterSimDispatchGroups;
+    };
+#endif
+
 uniform vec3 previousCameraPosition;
 
 #include "/lib/util.glsl"
@@ -162,5 +170,9 @@ void main() {
             waterRoundSize = size;
         }
     }
+
+    // Schedule both wave passes from the state prepared for this frame.
+    bool updateWaves = WATER_SIM_SHOULD_UPDATE;
+    waterSimDispatchGroups = updateWaves ? uvec3(WATER_SIM_WORK_GROUPS) : uvec3(0u);
     #endif
 }

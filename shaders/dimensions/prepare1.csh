@@ -4,43 +4,19 @@
 #include "/lib/settings.glsl"
 layout (local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-#if WATER_SIM_SCALE == 0
-    #if WATER_SIM_DISTANCE == 1
-        const ivec3 workGroups = ivec3(16, 16, 1);
-    #elif WATER_SIM_DISTANCE == 2
-        const ivec3 workGroups = ivec3(32, 32, 1);
-    #elif WATER_SIM_DISTANCE == 3
-        const ivec3 workGroups = ivec3(48, 48, 1);
-    #else
-        const ivec3 workGroups = ivec3(64, 64, 1);
-    #endif
-#elif WATER_SIM_SCALE == 1
-    #if WATER_SIM_DISTANCE == 1
-        const ivec3 workGroups = ivec3(32, 32, 1);
-    #elif WATER_SIM_DISTANCE == 2
-        const ivec3 workGroups = ivec3(64, 64, 1);
-    #elif WATER_SIM_DISTANCE == 3
-        const ivec3 workGroups = ivec3(96, 96, 1);
-    #else
-        const ivec3 workGroups = ivec3(128, 128, 1);
-    #endif
+#include "/lib/water_sim_dispatch.glsl"
+
+#if WATER_INTERACTION == 2
+    const ivec3 workGroups = WATER_SIM_WORK_GROUPS;
 #else
-    #if WATER_SIM_DISTANCE == 1
-        const ivec3 workGroups = ivec3(64, 64, 1);
-    #elif WATER_SIM_DISTANCE == 2
-        const ivec3 workGroups = ivec3(128, 128, 1);
-    #elif WATER_SIM_DISTANCE == 3
-        const ivec3 workGroups = ivec3(192, 192, 1);
-    #else
-        const ivec3 workGroups = ivec3(256, 256, 1);
-    #endif
+    const ivec3 workGroups = ivec3(0, 0, 0);
 #endif
 
 
 layout (rg16f) uniform image2D waveSim;
 layout (rgba16f) uniform readonly image2D waveSim2;
 
-const ivec2 resolution = ivec2(workGroups.x * 32, workGroups.y * 32);
+const ivec2 resolution = WATER_SIM_WORK_GROUPS.xy * 32;
 
 uniform int frameCounter;
 uniform float frameTimeCounter;
@@ -68,11 +44,10 @@ uniform float frameTimeCounter;
 
 void main() {
     #if WATER_INTERACTION == 2
-    if (abs(frameTimeCounter - lastFrameTimeCount) > WATER_SIM_FRAMETIME && (!noSimOngoing || onWaterSurface)) {
+    if (WATER_SIM_SHOULD_UPDATE) {
         // if (frameCounter == 0) return;
         ivec2 imgCoord = ivec2(gl_GlobalInvocationID.xy);
         float dist = length(imgCoord-0.5*resolution);
-        if (dist >= resolution.x) return;
 
         ivec2 movementOffset = water_move_compensationSSBO;
 
