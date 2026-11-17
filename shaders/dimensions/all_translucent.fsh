@@ -517,7 +517,9 @@ void Emission(
 
 float bias(){
 	// bias mipmapping as window resolution and / or render scale changes.
-	#ifdef TAA_UPSCALING
+	#if defined ECLIPSE_SR_UPSCALE
+		return (1.0 - texelSize.x * 2560.0) + log2(RENDER_SCALE.x);
+	#elif defined TAA_UPSCALING
 		return (1.0 - texelSize.x * 2560.0) + (0.0 - (1.0-RENDER_SCALE.x) * 2.0);
 	#else
 		return 1.0 - texelSize.x * 2560.0;
@@ -602,8 +604,8 @@ if (gl_FragCoord.x * texelSize.x < 1.0  && gl_FragCoord.y * texelSize.y < 1.0 )	
 
 	float BN = blueNoise();
 
-	#ifdef TAA
-		vec2 tempOffset = offsets[framemod8];
+	#if defined TAA || defined ECLIPSE_SR_UPSCALE
+		vec2 tempOffset = projectionJitter(framemod8);
 		vec3 viewPos = toScreenSpace(FragCoord*vec3(texelSize/RENDER_SCALE,1.0)-vec3(vec2(tempOffset)*texelSize*0.5, 0.0));
 	#else
 		vec3 viewPos = toScreenSpace(FragCoord*vec3(texelSize/RENDER_SCALE,1.0));

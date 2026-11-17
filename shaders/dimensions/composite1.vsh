@@ -67,13 +67,13 @@ void main() {
 		WmoonVec = customMoonVec2SSBO;
 	#endif
 
-	#ifdef TAA
-		TAA_Offset = offsets[framemod8];
+	#if defined TAA || defined ECLIPSE_SR_UPSCALE
+		TAA_Offset = projectionJitter(framemod8);
 	#else
 		TAA_Offset = vec2(0.0);
 	#endif
 
-	#ifdef TAA_UPSCALING
+	#ifdef SCALED_RENDERING
 		gl_Position.xy = (gl_Position.xy*0.5+0.5)*RENDER_SCALE*2.0-1.0;
 	#endif
 }

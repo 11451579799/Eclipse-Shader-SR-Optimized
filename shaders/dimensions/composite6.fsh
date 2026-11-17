@@ -62,6 +62,16 @@ const bool colortex18Clear = false;
 	*/
 #endif
 
+#ifdef ECLIPSE_SR_UPSCALE
+#include "/lib/sr_motion.glsl"
+
+void main() {
+	/* RENDERTARGETS:0 */
+	// The volumetric color in colortex0 was consumed by composite4.
+	gl_FragData[0] = vec4(cameraMotionVector(), 0.0, 1.0);
+}
+#else
+
 in DATA {
 	vec2 texcoord;
 	flat float tempOffsets;
@@ -465,3 +475,4 @@ void main() {
 		gl_FragData[0].rgb = color;
 	#endif
 }
+#endif

@@ -273,7 +273,9 @@ float ld(float dist) {
 
 float bias(){
 	// bias mipmapping as window resolution and / or render scale changes.
-	#ifdef TAA_UPSCALING
+	#if defined ECLIPSE_SR_UPSCALE
+		return (1.0 - texelSize.x * 2560.0) + log2(RENDER_SCALE.x);
+	#elif defined TAA_UPSCALING
 		return (1.0 - texelSize.x * 2560.0) + (0.0 - (1.0-RENDER_SCALE.x) * 2.0);
 	#else
 		return 1.0 - texelSize.x * 2560.0;
@@ -347,7 +349,11 @@ void main() {
 	float BN = blueNoise();
 	float R2 = R2_dither();
 
-	vec3 fragpos = toScreenSpace(FragCoord*vec3(texelSize/RENDER_SCALE,1.0));
+	vec3 depthPosition = FragCoord * vec3(texelSize / RENDER_SCALE, 1.0);
+	#ifdef ECLIPSE_SR_UPSCALE
+		depthPosition.xy -= SRJitterOffset / SRScaledViewportSize;
+	#endif
+	vec3 fragpos = toScreenSpace(depthPosition);
 	vec3 playerpos = mat3(gbufferModelViewInverse) * fragpos  + gbufferModelViewInverse[3].xyz;
 	vec3 worldpos = playerpos + cameraPosition;
 

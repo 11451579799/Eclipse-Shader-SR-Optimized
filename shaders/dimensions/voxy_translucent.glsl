@@ -9,7 +9,9 @@ layout (location = 3) out vec4 gbuffer_data_3;
 #include "/lib/blocks.glsl"
 #include "/lib/waterBump.glsl"
 #include "/lib/res_params.glsl"
-#include "/lib/TAA_jitter.glsl"
+#ifndef ECLIPSE_SR_UPSCALE
+  #include "/lib/TAA_jitter.glsl"
+#endif
 
 #undef Hand_Held_lights
 #undef PHOTONICS
@@ -150,7 +152,11 @@ vec3 rayTrace(vec3 dir, vec3 position, float dither, float fresnel) {
     stepv.xy *= RENDER_SCALE;
     
     vec3 spos = clipPosition + stepv * dither;
-    spos.xy += offsets[framemod8] * texelSize * 0.5 / RENDER_SCALE;
+    #ifdef ECLIPSE_SR_UPSCALE
+        spos.xy += srVoxyJitter * 0.5 * RENDER_SCALE;
+    #else
+        spos.xy += offsets[framemod8] * texelSize * 0.5 / RENDER_SCALE;
+    #endif
     
     float minZ = spos.z - 0.00025 / DH_ld(spos.z);
     float maxZ = spos.z;

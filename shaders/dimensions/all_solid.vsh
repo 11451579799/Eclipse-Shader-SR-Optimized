@@ -455,11 +455,11 @@ void main() {
 #endif
 
 	#if !defined SHADER_GRASS || defined ENTITIES || defined HAND || defined BLOCKENTITIES || defined CUTOUT
-		#ifdef TAA_UPSCALING
+		#ifdef SCALED_RENDERING
 			gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
 		#endif
-		#ifdef TAA
-			vec2 TAA_offsets = offsets[framemod8];
+		#if defined TAA || defined ECLIPSE_SR_UPSCALE
+			vec2 TAA_offsets = viewportJitter(framemod8);
 			// #ifdef HAND
 				// turn off jitter when camera moves.
 				// this is to hide the jitter when the same happens for TAA blend factor and the jitter becomes visible during camera movement

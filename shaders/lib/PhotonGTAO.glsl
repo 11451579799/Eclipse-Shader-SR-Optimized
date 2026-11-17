@@ -11,12 +11,6 @@ const float golden_ratio = 0.5 + 0.5 * sqrt(5.0);
 const float golden_angle = tau / golden_ratio / golden_ratio;
 const float hand_depth   = 0.56;
 
-#if defined TAA && defined TAA_UPSCALING
-const float taau_render_scale = RENDER_SCALE.x;
-#else
-const float taau_render_scale = 1.0;
-#endif
-
 // Helper functions
 
 #define rcp(x) (1.0 / (x))
@@ -122,7 +116,7 @@ float calculate_maximum_horizon_angle(
 
 
 	for (int i = 0; i < GTAO_HORIZON_STEPS; ++i, ray_pos += ray_step) {
-		float depth = texelFetch(depthtex2, ivec2(clamp(ray_pos,0.0,1.0) * view_res * taau_render_scale - 0.5), 0).x;
+		float depth = texelFetch(depthtex2, ivec2(clamp(ray_pos,0.0,1.0) * view_res * RENDER_SCALE - 0.5), 0).x;
 
 		if (depth == 1.0 || depth < hand_depth || depth == screen_pos.z) continue;
 

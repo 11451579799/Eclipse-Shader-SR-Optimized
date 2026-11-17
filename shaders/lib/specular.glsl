@@ -137,7 +137,9 @@ vec3 rayTraceSpeculars(vec3 dir, vec3 position, float dither, float quality, con
 	vec3 spos = clipPosition + stepv*(dither*0.5+0.5);
 	spos += vec3(0.5*texelSize,0.0); // small offsets to reduce artifacts from precision differences.
 	
-	#if defined DEFERRED_SPECULAR && defined TAA
+	#if defined DEFERRED_SPECULAR && defined ECLIPSE_SR_UPSCALE
+		spos.xy += SRJitterOffset * texelSize;
+	#elif defined DEFERRED_SPECULAR && defined TAA
 		spos.xy += TAA_Offset*texelSize*0.5/RENDER_SCALE;
 	#endif
 
@@ -169,7 +171,9 @@ vec3 rayTraceSpeculars(vec3 dir, vec3 position, float dither, float quality, con
 		vec3 spos2 = clipPosition2 + stepv2*(dither*0.5+0.5);
 		spos2 += vec3(0.5*texelSize,0.0); // small offsets to reduce artifacts from precision differences.
 		
-		#if defined DEFERRED_SPECULAR && defined TAA
+		#if defined DEFERRED_SPECULAR && defined ECLIPSE_SR_UPSCALE
+			spos2.xy += SRJitterOffset * texelSize;
+		#elif defined DEFERRED_SPECULAR && defined TAA
 			spos2.xy += TAA_Offset*texelSize*0.5/RENDER_SCALE;
 		#endif
 

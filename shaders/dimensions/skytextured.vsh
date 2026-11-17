@@ -31,10 +31,12 @@ void main() {
 		texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).st;
 		color = gl_Color;
 
-		#ifdef TAA_UPSCALING
+		#ifdef SCALED_RENDERING
 			gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
 		#endif
-		#ifdef TAA
+		#if defined ECLIPSE_SR_UPSCALE
+			gl_Position.xy += 2.0 * SRJitterOffset * gl_Position.w * texelSize;
+		#elif defined TAA
 			gl_Position.xy += offsets[framemod8] * gl_Position.w*texelSize;
 		#endif
 		

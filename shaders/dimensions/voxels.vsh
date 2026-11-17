@@ -260,8 +260,11 @@ void main() {
 
     gl_Position = toClipSpace3(mat3(gbufferModelView) * vec3(worldpos) + gbufferModelView[3].xyz);
 
-	#ifdef TAA_UPSCALING
+	#ifdef SCALED_RENDERING
 		gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
+	#endif
+	#ifdef ECLIPSE_SR_UPSCALE
+		gl_Position.xy += viewportJitter(framemod8) * gl_Position.w * texelSize;
 	#endif
 
 }

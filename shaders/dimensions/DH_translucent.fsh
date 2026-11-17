@@ -189,7 +189,11 @@ vec3 rayTrace(vec3 dir, vec3 position, float dither, float fresnel) {
     stepv.xy *= RENDER_SCALE;
     
     vec3 spos = clipPosition + stepv * dither;
-    spos.xy += offsets[framemod8] * texelSize * 0.5 / RENDER_SCALE;
+    #ifdef ECLIPSE_SR_UPSCALE
+        spos.xy += SRJitterOffset * texelSize;
+    #else
+        spos.xy += offsets[framemod8] * texelSize * 0.5 / RENDER_SCALE;
+    #endif
     
     float minZ = spos.z - 0.00025 / DH_ld(spos.z);
     float maxZ = spos.z;

@@ -176,13 +176,11 @@ void main() {
 	#endif
 	
 
-	#ifdef TAA_UPSCALING
+	#ifdef SCALED_RENDERING
 		gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
 	#endif
 	
-	#ifndef WEATHER
-		#ifdef TAA
-			gl_Position.xy += offsets[framemod8] * gl_Position.w*texelSize;
-		#endif
+	#if defined ECLIPSE_SR_UPSCALE || (defined TAA && !defined WEATHER)
+		gl_Position.xy += viewportJitter(framemod8) * gl_Position.w * texelSize;
 	#endif
 }

@@ -79,8 +79,8 @@ uniform int hideGUI;
 uniform float aspectRatio;
 uniform float screenBrightness;
 
-#include "/lib/TAA_jitter.glsl"
 #include "/lib/res_params.glsl"
+#include "/lib/TAA_jitter.glsl"
 #include "/lib/bokeh.glsl"
 
 
@@ -138,7 +138,7 @@ vec3 calculateNormal(vec3 v0, vec3 v1, vec3 v2) {
 void main() {
 
     #ifdef SHADER_GRASS
-        vec2 TAA_offsets = offsets[framemod8];
+        vec2 TAA_offsets = viewportJitter(framemod8);
     #endif
     
     int i;
@@ -157,10 +157,10 @@ void main() {
                 vertex = toClipSpace3(mat3(gbufferModelView) * vec3(vertex) + gbufferModelView[3].xyz);
             #endif
 
-            #ifdef TAA_UPSCALING
+            #ifdef SCALED_RENDERING
                 vertex.xy = vertex.xy * RENDER_SCALE + RENDER_SCALE * vertex.w - vertex.w;
             #endif
-            #ifdef TAA
+            #if defined TAA || defined ECLIPSE_SR_UPSCALE
                 // #ifdef HAND
                     // turn off jitter when camera moves.
                     // this is to hide the jitter when the same happens for TAA blend factor and the jitter becomes visible during camera movement
@@ -401,10 +401,10 @@ void main() {
 
                     gl_Position = toClipSpace3(mat3(gbufferModelView) * (verticies[3*j+i]) + gbufferModelView[3].xyz);
 
-                    #ifdef TAA_UPSCALING
+                    #ifdef SCALED_RENDERING
                         gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
                     #endif
-                    #ifdef TAA
+                    #if defined TAA || defined ECLIPSE_SR_UPSCALE
                         // #ifdef HAND
                             // turn off jitter when camera moves.
                             // this is to hide the jitter when the same happens for TAA blend factor and the jitter becomes visible during camera movement

@@ -139,11 +139,11 @@ void main() {
 
         if(data_in[i].color.a < 1.0) gl_Position = vec4(10,10,10,0);
 
-        #ifdef TAA_UPSCALING
+        #ifdef SCALED_RENDERING
             gl_Position.xy = gl_Position.xy * RENDER_SCALE + RENDER_SCALE * gl_Position.w - gl_Position.w;
         #endif
-        #ifdef TAA
-            gl_Position.xy += offsets[framemod8] * gl_Position.w*texelSize;
+        #if defined TAA || defined ECLIPSE_SR_UPSCALE
+            gl_Position.xy += viewportJitter(framemod8) * gl_Position.w*texelSize;
         #endif
 
 

@@ -117,7 +117,9 @@ vec3 rayTrace_GI(vec3 dir,vec3 position,float dither, float quality){
 	vec3 spos = clipPosition + stepv*dither;
 	// spos += stepv*0.3;
 
-	#if defined DEFERRED_SPECULAR && defined TAA
+	#if defined DEFERRED_SPECULAR && defined ECLIPSE_SR_UPSCALE
+		spos.xy += SRJitterOffset * texelSize;
+	#elif defined DEFERRED_SPECULAR && defined TAA
 		spos.xy += TAA_Offset*texelSize*0.5/RENDER_SCALE;
 	#endif
 
