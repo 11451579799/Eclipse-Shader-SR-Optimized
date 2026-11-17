@@ -43,7 +43,13 @@ uniform float frameTimeCounter;
 void main() {
 	gl_Position = ftransform();
 
-	gl_Position.xy = (gl_Position.xy*0.5+0.5)*(0.01+VL_RENDER_SCALE)*2.0-1.0;
+	vec2 bounds = vec2(0.01 + VL_RENDER_SCALE);
+	#ifdef ECLIPSE_SR_UPSCALE
+		// The bilateral filter and its history clamp sample adjacent fog texels.
+		vec2 fogSize = SRScaledViewportSize * VL_RENDER_SCALE;
+		bounds = min(bounds, (fogSize + 3.0) / SROriginalViewportSize);
+	#endif
+	gl_Position.xy = (gl_Position.xy + 1.0) * bounds - 1.0;
 
 	float lightSourceCheck = float(sunElevation > 1e-5)*2.0 - 1.0;
 

@@ -246,6 +246,11 @@ vec3 viewToWorld(vec3 viewPosition) {
 vec2 clampUV(in vec2 uv, vec2 texcoord){
   // return uv;
 
+  #ifdef ECLIPSE_SR_UPSCALE
+    uv /= RENDER_SCALE;
+    texcoord /= RENDER_SCALE;
+  #endif
+
   // get the gradient when a refracted axis and non refracted axis go above 1.0 or below 0.0
   // use this gradient to lerp between refracted and non refracted uv
   // the goal of this is to stretch the uv back to normal when the refracted image exposes off screen uv
@@ -257,7 +262,12 @@ vec2 clampUV(in vec2 uv, vec2 texcoord){
   vignette = max((uv.y-1.0) * (texcoord.y-1.0), vignette);
   vignette *= vignette*vignette*vignette*vignette;
 
-  return clamp(mix(uv, texcoord, vignette),0.0,0.9999999);
+  #ifdef ECLIPSE_SR_UPSCALE
+    // Keep bilinear reads inside the current scene rectangle.
+    return clamp(mix(uv, texcoord, vignette) * RENDER_SCALE, 0.5 * texelSize, RENDER_SCALE - 0.5 * texelSize);
+  #else
+    return clamp(mix(uv, texcoord, vignette),0.0,0.9999999);
+  #endif
 }
 
 vec3 doRefractionEffect( inout vec2 passTexcoord, vec2 normal, float linearDistance, bool isReflectiveEntity, bool underwater){

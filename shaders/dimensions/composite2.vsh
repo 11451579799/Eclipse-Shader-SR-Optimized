@@ -1,4 +1,5 @@
 #include "/lib/settings.glsl"
+#include "/lib/res_params.glsl"
 
 #include "/lib/SSBOs.glsl"
 
@@ -55,4 +56,9 @@ void main() {
 	#endif
 
 	gl_Position = ftransform();
+	#ifdef ECLIPSE_SR_UPSCALE
+		// One extra texel supplies bilinear samples at the edge of the reflection history.
+		vec2 bounds = min((SRScaledViewportSize + 1.0) / SROriginalViewportSize, vec2(1.0));
+		gl_Position.xy = (gl_Position.xy + 1.0) * bounds - 1.0;
+	#endif
 }
