@@ -15,6 +15,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 #ifdef IS_LPV_ENABLED
     shared vec4 lpvSharedData[10*10*10];
     shared uint voxelSharedData[10*10*10];
+    shared uint voxelFaceMasks[10*10*10];
 
     const vec2 LpvBlockSkyFalloff = vec2(0.96, 0.96);
     const ivec3 lpvFlatten = ivec3(1, 10, 100);
@@ -44,6 +45,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
         vec4 lpvSample = (frameCounter % 2) == 0
             ? imageLoad(imgLpv2, texCoord)
             : imageLoad(imgLpv1, texCoord);
+        if (lpvSample == vec4(0.0)) return lpvSample;
 
         vec4 hsv_sky = vec4(RgbToHsv(lpvSample.rgb), lpvSample.a);
         hsv_sky.zw = exp2(hsv_sky.zw * LpvBlockSkyRange) - 1.0;
@@ -76,21 +78,17 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
         ivec3 pos = workGroupOffset + localPos;
 
         lpvSharedData[index] = GetLpvValue(cameraOffset + pos);
-        voxelSharedData[index] = GetVoxelBlock(pos);
+        uint blockId = GetVoxelBlock(pos);
+        voxelSharedData[index] = blockId;
+        // Every neighbor uses the same six face bits for this voxel.
+        voxelFaceMasks[index] = blockId > 0u && blockId < 2048u
+            ? imageLoad(imgBlockData, int(blockId)).g >> 24 : 0x3Fu;
     }
 
     vec4 sampleShared(ivec3 pos, int mask_index) {
         int shared_index = getSharedIndex(pos + 1);
 
-        float mixWeight = 1.0;
-        uint mask = 0xFFFF;
-        uint blockId = voxelSharedData[shared_index];
-        
-        if (blockId > 0 && blockId < 2048) {
-            uvec2 blockData = imageLoad(imgBlockData, int(blockId)).rg;
-            mask = (blockData.g >> 24) & 0xFFFF;
-        }
-
+        uint mask = voxelFaceMasks[shared_index];
         return lpvSharedData[shared_index] * ((mask >> mask_index) & 1u);
     }
 
@@ -204,9 +202,11 @@ void main() {
         }
 
         // Convert back to linear RGB space
-        vec4 hsv_sky = vec4(RgbToHsv(lightValue.rgb), lightValue.a);
-        hsv_sky.zw = log2(hsv_sky.zw + 1.0) / LpvBlockSkyRange;
-        lightValue = vec4(HsvToRgb(hsv_sky.xyz), hsv_sky.w);
+        if (lightValue != vec4(0.0)) {
+            vec4 hsv_sky = vec4(RgbToHsv(lightValue.rgb), lightValue.a);
+            hsv_sky.zw = log2(hsv_sky.zw + 1.0) / LpvBlockSkyRange;
+            lightValue = vec4(HsvToRgb(hsv_sky.xyz), hsv_sky.w);
+        }
 
         // Store final value
         if (frameCounter % 2 == 0)
