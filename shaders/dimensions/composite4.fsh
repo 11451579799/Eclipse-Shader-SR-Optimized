@@ -114,6 +114,13 @@ layout (rg16f) uniform readonly image2D cloudDepthTex;
 #include "/lib/waterBump.glsl"
 #include "/lib/res_params.glsl"
 
+#ifdef ECLIPSE_SR_UPSCALE
+  uniform sampler2D colortex18;
+  #define VOL_FOG_FRONT colortex18
+#else
+  #define VOL_FOG_FRONT colortex0
+#endif
+
 #ifdef OVERWORLD_SHADER
   #include "/lib/climate_settings.glsl"
 #endif
@@ -390,7 +397,11 @@ vec4 bilateralUpsample(vec2 fragcoord, sampler2D colortex, out float outerEdgeRe
     float edgeDiff = abs(offsetDepth - referenceDepth) < threshold ? 1.0 : 1e-7;
     outerEdgeResults = max(outerEdgeResults, abs(referenceDepth - offsetDepth));
 
-    vec4 offsetColor = texelFetch(colortex, UV_COLOR + OFFSET[i] + UV_NOISE, 0);
+    ivec2 fogPixel = UV_COLOR + OFFSET[i] + UV_NOISE;
+    #ifdef ECLIPSE_SR_UPSCALE
+      fogPixel = clamp(fogPixel, ivec2(0), textureSize(colortex, 0) - 1);
+    #endif
+    vec4 offsetColor = texelFetch(colortex, fogPixel, 0);
     colorSum += offsetColor*edgeDiff;
     edgeSum += edgeDiff;
 
@@ -404,7 +415,13 @@ vec4 bilateralUpsample(vec2 fragcoord, sampler2D colortex, out float outerEdgeRe
 vec4 VLTemporalFiltering(vec3 playerPosIn, in float referenceDepth, sampler2D depth, bool hand){
   vec2 screenEdges = 2.0/vec2(viewWidth, viewHeight);
   vec2 offsetTexcoord = clamp(gl_FragCoord.xy*texelSize, screenEdges, 1.0-screenEdges);
-  vec2 VLtexCoord = offsetTexcoord * VL_RENDER_SCALE;
+  #ifdef ECLIPSE_SR_UPSCALE
+    vec2 fogTexelSize = 1.0 / vec2(textureSize(colortex18, 0));
+    vec2 VLtexCoord = (offsetTexcoord / texelSize) * VL_RENDER_SCALE * fogTexelSize;
+  #else
+    vec2 fogTexelSize = texelSize;
+    vec2 VLtexCoord = offsetTexcoord * VL_RENDER_SCALE;
+  #endif
   
 	// get previous frames position stuff for UV
 	vec3 playerPos = playerPosIn + (cameraPosition - previousCameraPosition);
@@ -414,7 +431,7 @@ vec4 VLTemporalFiltering(vec3 playerPosIn, in float referenceDepth, sampler2D de
 	vec2 velocity = previousPosition.xy - offsetTexcoord;
 	previousPosition.xy = offsetTexcoord + velocity;
 
-  vec4 currentFrame = texture(colortex0, VLtexCoord);
+  vec4 currentFrame = texture(VOL_FOG_FRONT, VLtexCoord);
 
   // return vec4(outerEdgeResults,0,0,1);
   // return upsampledCurrentFrame;
@@ -424,17 +441,17 @@ vec4 VLTemporalFiltering(vec3 playerPosIn, in float referenceDepth, sampler2D de
   // to fill pixel gaps in geometry edges, do a bilateral upsample.
   // pass a mask to only show upsampled color around the edges of blocks. this is so it doesnt blur reprojected results.
   float outerEdgeResults = 0.0;
-  vec4 upsampledCurrentFrame = bilateralUpsample(gl_FragCoord.xy , colortex0, outerEdgeResults, referenceDepth, depth, hand, 2);
+  vec4 upsampledCurrentFrame = bilateralUpsample(gl_FragCoord.xy, VOL_FOG_FRONT, outerEdgeResults, referenceDepth, depth, hand, 2);
   // vec4 upsampledCurrentFrame = BilateralUpscale(colortex0, depth, gl_FragCoord.xy - 1.5, referenceDepth);
   
-	vec4 col1 = texture(colortex0, VLtexCoord + vec2( texelSize.x,  texelSize.y));
-	vec4 col2 = texture(colortex0, VLtexCoord + vec2( texelSize.x, -texelSize.y));
-	vec4 col3 = texture(colortex0, VLtexCoord + vec2(-texelSize.x, -texelSize.y));
-	vec4 col4 = texture(colortex0, VLtexCoord + vec2(-texelSize.x,  texelSize.y));
-	vec4 col5 = texture(colortex0, VLtexCoord + vec2( 0.0,			    texelSize.y));
-	vec4 col6 = texture(colortex0, VLtexCoord + vec2( 0.0,			   -texelSize.y));
-	vec4 col7 = texture(colortex0, VLtexCoord + vec2(-texelSize.x,  		    0.0));
-	vec4 col8 = texture(colortex0, VLtexCoord + vec2( texelSize.x,  		    0.0));
+	vec4 col1 = texture(VOL_FOG_FRONT, VLtexCoord + vec2( fogTexelSize.x,  fogTexelSize.y));
+	vec4 col2 = texture(VOL_FOG_FRONT, VLtexCoord + vec2( fogTexelSize.x, -fogTexelSize.y));
+	vec4 col3 = texture(VOL_FOG_FRONT, VLtexCoord + vec2(-fogTexelSize.x, -fogTexelSize.y));
+	vec4 col4 = texture(VOL_FOG_FRONT, VLtexCoord + vec2(-fogTexelSize.x,  fogTexelSize.y));
+	vec4 col5 = texture(VOL_FOG_FRONT, VLtexCoord + vec2( 0.0,            fogTexelSize.y));
+	vec4 col6 = texture(VOL_FOG_FRONT, VLtexCoord + vec2( 0.0,           -fogTexelSize.y));
+	vec4 col7 = texture(VOL_FOG_FRONT, VLtexCoord + vec2(-fogTexelSize.x, 0.0));
+	vec4 col8 = texture(VOL_FOG_FRONT, VLtexCoord + vec2( fogTexelSize.x, 0.0));
 
 	vec4 colMax = max(currentFrame,max(col1,max(col2,max(col3, max(col4, max(col5, max(col6, max(col7, col8))))))));
 	vec4 colMin = min(currentFrame,min(col1,min(col2,min(col3, min(col4, min(col5, min(col6, min(col7, col8))))))));

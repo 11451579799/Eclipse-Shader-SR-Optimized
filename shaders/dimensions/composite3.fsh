@@ -744,7 +744,11 @@ vec2 decodeVec2(float a){
 
 void main() {
 
-	/* RENDERTARGETS:0,13 */
+	#ifdef ECLIPSE_SR_UPSCALE
+		/* RENDERTARGETS:18,13 */
+	#else
+		/* RENDERTARGETS:0,13 */
+	#endif
 
 	gl_FragData[1] = vec4(0.0,0.0,0.0, 1.0);
 

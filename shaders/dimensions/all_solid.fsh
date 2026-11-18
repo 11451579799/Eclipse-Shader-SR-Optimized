@@ -405,6 +405,11 @@ uniform float alphaTestRef;
 //////////////////////////////VOID MAIN//////////////////////////////
 //////////////////////////////VOID MAIN//////////////////////////////
 
+#if defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+	in vec4 srPreviousEntityClip;
+	in float srEntityVelocityValid;
+#endif
+
 layout(location = 0) out vec4 OutAlbedo;
 layout(location = 1) out vec4 OutSpecular;
 
@@ -412,7 +417,15 @@ layout(location = 1) out vec4 OutSpecular;
 	layout(location = 2) out vec4 OutTranslucents;
 	#ifdef VOXY
 		layout(location = 3) out vec4 OutTranslucents2;
-		/* RENDERTARGETS:1,8,2,7 */
+		#if defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+			layout(location = 4) out vec2 OutEntityVelocity;
+			/* RENDERTARGETS:1,8,2,7,19 */
+		#else
+			/* RENDERTARGETS:1,8,2,7 */
+		#endif
+	#elif defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+		layout(location = 3) out vec2 OutEntityVelocity;
+		/* RENDERTARGETS:1,8,2,19 */
 	#else
 		/* RENDERTARGETS:1,8,2 */
 	#endif
@@ -802,6 +815,15 @@ void main() {
 		#ifdef VOXY
 			OutTranslucents2 = vec4(0.0);
 		#endif
+	#endif
+
+	#if defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+		OutEntityVelocity = vec2(2.0);
+		if (srEntityVelocityValid >= 0.999 && srPreviousEntityClip.w > 0.0) {
+			vec2 previousUv = (srPreviousEntityClip.xy / srPreviousEntityClip.w) * 0.5 + 0.5;
+			vec2 currentUv = (gl_FragCoord.xy - SRJitterOffset) / SRScaledViewportSize;
+			OutEntityVelocity = clamp(previousUv - currentUv, -1.0, 1.0);
+		}
 	#endif
 
 	// #ifdef COLORWHEEL

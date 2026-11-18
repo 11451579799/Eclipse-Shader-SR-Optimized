@@ -63,12 +63,24 @@ const bool colortex18Clear = false;
 #endif
 
 #ifdef ECLIPSE_SR_UPSCALE
+/*
+const int colortex17Format = RG16F;
+const int colortex18Format = RGBA16F;
+*/
+
+#ifdef ECLIPSE_SR_ENTITY_VELOCITY
+	/*
+	const int colortex19Format = RG16F;
+	*/
+	const bool colortex19Clear = true;
+	const vec4 colortex19ClearColor = vec4(2.0, 2.0, 0.0, 0.0);
+#endif
+
 #include "/lib/sr_motion.glsl"
 
 void main() {
-	/* RENDERTARGETS:0 */
-	// The volumetric color in colortex0 was consumed by composite4.
-	gl_FragData[0] = vec4(cameraMotionVector(), 0.0, 1.0);
+	/* RENDERTARGETS:17 */
+	gl_FragData[0] = vec4(srMotionVector(), 0.0, 1.0);
 }
 #else
 

@@ -71,6 +71,10 @@ Note: With default settings there is at least one guaranteed eclipse per ingame 
  - click the `green "code" button` and select `"download zip"`.
  - once the zip file finishes downloading, install it like a normal shader. you do NOT need to unzip/extract/decompress.
 
+## Super Resolution
+
+With Super Resolution active, the motion vector target and the two volumetric fog targets use the internal render size. To supply object motion for opaque entities, enable the Iris extension option in Super Resolution 0.9.2-alpha.1 or newer on Minecraft 26.1 or newer and restart the game. The shader uses camera reprojection when the extension provides no tracked velocity.
+
 # Incompatible Mods / Mods with issues
 - OptiFine
 - Iris/Oculus requires at least version 1.6.11 of the mod

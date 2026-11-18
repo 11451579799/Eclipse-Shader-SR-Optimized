@@ -11,6 +11,9 @@
 
 #if defined SR_SHOULD_APPLY_SCALE && SR_SHOULD_APPLY_SCALE
   #define ECLIPSE_SR_UPSCALE
+  #ifdef SR_IRIS_EXT_VELOCITY
+    #define ECLIPSE_SR_ENTITY_VELOCITY
+  #endif
   #define SCALED_RENDERING
   #ifdef VOXY_PROGRAM
     #define RENDER_SCALE srVoxyScale

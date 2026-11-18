@@ -94,8 +94,12 @@ uniform float rainStrength;
 uniform int worldTime;
 uniform vec3 previousCameraPosition;
 
-// in vec3 at_velocity;
-// out vec3 velocity;
+#if defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+	in vec3 at_velocity;
+	out vec4 srPreviousEntityClip;
+	out float srEntityVelocityValid;
+	uniform mat4 gbufferPreviousProjection;
+#endif
 
 uniform float nightVision;
 
@@ -259,6 +263,13 @@ void main() {
 	#endif
 
 	vec3 position = mat3(gl_ModelViewMatrix) * vec3(gl_Vertex) + gl_ModelViewMatrix[3].xyz;
+
+	#if defined ECLIPSE_SR_ENTITY_VELOCITY && defined ENTITIES && !defined COLORWHEEL
+		vec3 previousView = position - at_velocity;
+		srPreviousEntityClip = gbufferPreviousProjection * vec4(previousView, 1.0);
+		// The extension uses a zero vector when no corresponding vertex was tracked.
+		srEntityVelocityValid = float(any(notEqual(at_velocity, vec3(0.0))));
+	#endif
 
     /////// ----- COLOR STUFF ----- ///////
 	data_out.color = gl_Color;

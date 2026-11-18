@@ -18,6 +18,9 @@ out DATA {
 uniform vec2 texelSize;
 
 uniform sampler2D colortex4;
+#ifdef ECLIPSE_SR_UPSCALE
+	uniform sampler2D colortex13;
+#endif
 
 uniform float sunElevation;
 uniform vec3 sunPosition;
@@ -47,7 +50,9 @@ void main() {
 	#ifdef ECLIPSE_SR_UPSCALE
 		// The bilateral filter and its history clamp sample adjacent fog texels.
 		vec2 fogSize = SRScaledViewportSize * VL_RENDER_SCALE;
-		bounds = min(bounds, (fogSize + 3.0) / SROriginalViewportSize);
+		vec2 fogTargetSize = vec2(textureSize(colortex13, 0));
+		vec2 fogBounds = min(bounds * SROriginalViewportSize, fogSize + 3.0);
+		bounds = min(fogBounds / fogTargetSize, vec2(1.0));
 	#endif
 	gl_Position.xy = (gl_Position.xy + 1.0) * bounds - 1.0;
 

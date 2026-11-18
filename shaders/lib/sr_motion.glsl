@@ -6,6 +6,12 @@ uniform mat4 gbufferPreviousProjection;
 uniform vec3 cameraPosition;
 uniform vec3 previousCameraPosition;
 
+#ifdef ECLIPSE_SR_ENTITY_VELOCITY
+	uniform sampler2D depthtex1;
+	uniform sampler2D colortex1;
+	uniform sampler2D colortex19;
+#endif
+
 #if defined DISTANT_HORIZONS
 	uniform sampler2D dhDepthTex;
 	uniform mat4 dhProjectionInverse;
@@ -22,9 +28,19 @@ uniform vec3 previousCameraPosition;
 	#define SR_LOD_PREVIOUS_PROJECTION vxProjPrev
 #endif
 
-vec2 cameraMotionVector() {
+vec2 srMotionVector() {
 	ivec2 pixel = ivec2(gl_FragCoord.xy);
 	float depth = texelFetch(depthtex0, pixel, 0).r;
+
+	#ifdef ECLIPSE_SR_ENTITY_VELOCITY
+		vec2 velocity = texelFetch(colortex19, pixel, 0).rg;
+		if (all(lessThan(abs(velocity), vec2(1.0))) && depth == texelFetch(depthtex1, pixel, 0).r) {
+			// The high byte of the packed G-buffer channel identifies the visible opaque material.
+			uint mask = uint(round(texelFetch(colortex1, pixel, 0).w * 65535.0)) >> 8;
+			if (mask == 114u || mask == 229u) return velocity;
+		}
+	#endif
+
 	if (depth < 0.56) return vec2(0.0); // First-person hand depth range.
 
 	mat4 inverseProjection = gbufferProjectionInverse;

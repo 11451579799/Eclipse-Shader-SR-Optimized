@@ -30,7 +30,7 @@
           },
           "motion_vectors": {
             "enabled": true,
-            "src": "autotex0",
+            "src": "autotex17",
             "region": [0, 0, -1, -1]
           }
         },
