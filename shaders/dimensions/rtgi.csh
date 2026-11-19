@@ -72,7 +72,7 @@ bool rtgiHistorySurface(ivec2 tile, bool evenFrame, vec3 normal, float depth, ve
 
 bool rtgiReproject(
 	RtgiSurface surface, vec2 viewport, ivec2 tileSize, bool evenFrame,
-	out ivec2 historyTile, out float historyCount
+	out ivec2 historyTile, out float historyCount, out vec2 previousPixel
 ) {
 	vec3 world = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz;
 	world += cameraPosition - previousCameraPosition;
@@ -96,6 +96,7 @@ bool rtgiReproject(
 			if (rtgiHistorySurface(tile, evenFrame, surface.worldNormal, -view.z, slope, pixel, geometry)) {
 				historyTile = tile;
 				historyCount = geometry.z;
+				previousPixel = pixel - rtgiPreviousJitter;
 				return true;
 			}
 		}
@@ -217,6 +218,7 @@ void main() {
 	RtgiSurface hit;
 	ivec2 historyTile;
 	float historyCount;
+	vec2 previousPixel;
 	float hitDistance;
 	vec3 direction = rtgiDirection(tile, surface.worldNormal);
 	bool screenHit = rtgiTrace(surface, direction, pixel, renderSize, viewport, jitter, hit, hitDistance);
@@ -225,7 +227,7 @@ void main() {
 	bool hasScreenLight = false;
 	if (screenHit) {
 		sampleLighting.a = (1.0 - smoothstep(0.16, 2.0, hitDistance));
-		if (historyAvailable && rtgiReproject(hit, viewport, tileSize, evenFrame, historyTile, historyCount)) {
+		if (historyAvailable && rtgiReproject(hit, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
 			vec4 direct = imageLoad(rtgiLight, historyTile);
 			hasScreenLight = direct.a > 0.0;
 			sampleLighting.rgb = max(direct.rgb, vec3(0.0));
@@ -235,14 +237,18 @@ void main() {
 
 	vec4 previousLighting = vec4(0.0);
 	float sampleCount = 1.0;
-	if (historyAvailable && rtgiReproject(surface, viewport, tileSize, evenFrame, historyTile, historyCount)) {
+	if (historyAvailable && rtgiReproject(surface, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
 		previousLighting = evenFrame ? imageLoad(rtgiHistory1, historyTile) : imageLoad(rtgiHistory0, historyTile);
-		float screenMotion = length(vec2(tile - historyTile) * float(rtgiStride));
-		sampleCount += min(historyCount, mix(7.0, 2.0, smoothstep(2.0, 12.0, screenMotion)));
+		vec2 currentPixel = vec2(pixel) + 0.5 - jitter;
+		float screenMotion = length(currentPixel - previousPixel);
+		sampleCount += min(historyCount, mix(15.0, 2.0, smoothstep(1.0, 10.0, screenMotion)));
 	}
 
 	vec4 geometry = vec4(rtgiEncodeNormal(surface.worldNormal), sampleCount, -surface.viewPosition.z);
-	rtgiStoreTile(tile, evenFrame, geometry, mix(previousLighting, sampleLighting, 1.0 / sampleCount));
+	// Keep contact occlusion responsive when nearby geometry changes.
+	vec2 sampleWeight = 1.0 / vec2(sampleCount, min(sampleCount, 8.0));
+	vec4 lighting = mix(previousLighting, sampleLighting, sampleWeight.xxxy);
+	rtgiStoreTile(tile, evenFrame, geometry, lighting);
 }
 
 #else
