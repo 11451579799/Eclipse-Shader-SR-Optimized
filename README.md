@@ -74,6 +74,13 @@ Note: With default settings there is at least one guaranteed eclipse per ingame 
 ## Super Resolution
 
 With Super Resolution active, the motion vector target and the two volumetric fog targets use the internal render size. To supply object motion for opaque entities, enable the Iris extension option in Super Resolution 0.9.2-alpha.1 or newer on Minecraft 26.1 or newer and restart the game. The shader uses camera reprojection when the extension provides no tracked velocity.
+## Hybrid ray-traced lighting
+
+This edition enables **Ambient Light → Hybrid Ray Tracing → Ray-traced Diffuse Lighting** by default in the Overworld. A sunlit colored wall can tint a nearby floor. Emissive materials and block-lit surfaces can contribute through screen hits. The same ray estimates short-range contact occlusion for ambient light. Bounce strength and contact occlusion have independent controls.
+
+The pass runs before DLSS. It samples one cosine-weighted ray per 3×3 internal pixels and defaults to eight screen-depth steps. Depth and normals guide temporal reuse and upsampling. When LPV is enabled, a bounded voxel traversal can recover a nearby off-screen sunlit surface from the existing shadow map. Receivers fade out over 40–48 blocks of view depth. Glass, water, moving entities and distant terrain use the pack's existing lighting. Photonics GI takes priority in its coverage area.
+
+The screen-first trace and world-space fallback are inspired by Ubisoft's Anvil lighting work. Eclipse uses OpenGL compute, its voxel grid and a single diffuse bounce. Glossy and mirror reflections use Eclipse's existing specular path. [Ubisoft's SIGGRAPH presentation](https://advances.realtimerendering.com/s2025/content/Advances%202025%20-%20Raytracing%20the%20world%20of%20Assassin%27s%20Creed%20Shadows.pdf)
 
 # Incompatible Mods / Mods with issues
 - OptiFine

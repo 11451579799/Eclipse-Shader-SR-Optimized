@@ -292,6 +292,11 @@ screen.Ambient_light = Ambient Light
     option.GTAO_SLICES = GTAO Quality
 
     screen.SSRT_SETTINGS = SSRT Settings
+    screen.RTGI_SETTINGS = Hybrid Ray Tracing
+    option.RTGI = Ray-traced Diffuse Lighting
+    option.RTGI_STRENGTH = Bounce Strength
+    option.RTGI_CONTACT_STRENGTH = Contact Occlusion Strength
+    option.RTGI_STEPS = Ray Steps
 
     screen.Ambient_Colors =  Ambient Light Color
         option.AmbientLight_R = Red Amount
@@ -1042,6 +1047,10 @@ screen.Shadows.comment = Configure the shadows from the sun to your liking.
 screen.Ambient_light.comment = Configure settings related to the lighting in shaded places
     option.AO_Strength.comment = Configure the strength of the ambient occlusion created by SSAO, GTAO, and SSRT. §bWhat is this?§r ambient occlusion is the small soft shadows in corners and such.
     option.GI_Strength.comment = Configure the strength of the global illumination created by SSRT. §bWhat is this?§r global illumination in this scenario specifically is the light bouncing off a surface and onto some other area.
+    option.RTGI.comment = Trace local diffuse lighting in the Overworld. With LPV enabled, nearby sunlit blocks can also contribute from outside the screen.
+    option.RTGI_CONTACT_STRENGTH.comment = Darken ambient light near contact with other surfaces using the same diffuse ray. Set to zero to keep the original ambient occlusion.
+    option.RTGI_STRENGTH.comment = Scale the indirect light from the diffuse bounce.
+    option.RTGI_STEPS.comment = Set the depth samples per ray. Higher values can resolve thinner surfaces.
     option.HQ_SSGI.comment = Toggle long range screen-space raytracing. this will allow SSRT lighting to travel ALOT farther within the scene from where it bounces/casts shadows. §aPERFORMANCE COST:§r very high
     option.Hand_Held_lights.comment = Toggle shader-side hand held lightsources. §aPERFORMANCE COST:§r very low
     option.SKY_CONTRIBUTION_IN_SSRT.comment = Allow the SSRT to take the entire sky and fog into account to create high quality lighting for shaded areas. This may introduce more noise. §aPERFORMANCE COST:§r medium

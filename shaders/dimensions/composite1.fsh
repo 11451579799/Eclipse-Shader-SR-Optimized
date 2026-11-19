@@ -202,6 +202,12 @@ float convertHandDepth_2(in float depth, bool hand) {
 }
 
 #include "/lib/projections.glsl"
+#ifdef ECLIPSE_RTGI_OVERWORLD
+	#include "/lib/rtgi_buffers.glsl"
+	#ifdef ECLIPSE_RTGI_ACTIVE
+		#include "/lib/rtgi_composite.glsl"
+	#endif
+#endif
 #include "/lib/DistantHorizons_projections.glsl"
 #include "/lib/color_transforms.glsl"
 #include "/lib/waterBump.glsl"
@@ -249,11 +255,7 @@ float convertHandDepth_2(in float depth, bool hand) {
 #define MAIN_SHADOW_PASS
 #define FULLRESDEPTH
 
-vec2 decodeVec2(float a){
-    const vec2 constant1 = 65535. / vec2( 256., 65536.);
-    const float constant2 = 256. / 255.;
-    return fract( a * constant1 ) * constant2 ;
-}
+#include "/lib/opaque_gbuffer.glsl"
 
 #if defined VIVECRAFT
 	uniform bool vivecraftIsVR;
@@ -272,15 +274,6 @@ vec2 decodeVec2(float a){
 
 float ld(float dist) {
     return (2.0 * near) / (far + near - dist * (far - near));
-}
-
-vec3 decode (vec2 encn){
-    vec3 n = vec3(0.0);
-    encn = encn * 2.0 - 1.0;
-    n.xy = abs(encn);
-    n.z = 1.0 - n.x - n.y;
-    n.xy = n.z <= 0.0 ? (1.0 - n.yx) * sign(encn) : encn;
-    return clamp(normalize(n.xyz),-1.0,1.0);
 }
 
 float DH_ld(float dist) {
@@ -997,6 +990,14 @@ vec2 encodeNormal(vec3 n){
 }
 
 void main() {
+		#ifdef ECLIPSE_RTGI_ACTIVE
+			ivec2 rtgiPixel = ivec2(gl_FragCoord.xy);
+			ivec2 rtgiSize = rtgiRenderSize();
+			ivec2 rtgiTiles = rtgiTileSize(rtgiSize);
+			bool rtgiTileOrigin = rtgiIsTileOrigin(rtgiPixel, rtgiSize, rtgiTiles);
+			if (all(equal(rtgiPixel, ivec2(0)))) rtgiPublishFrame(rtgiSize);
+		#endif
+
 		#if defined DEFERRED_SPECULAR && defined DENOISED_REFLECTIONS
 		gl_FragData[1] = vec4(0.0);
 		gl_FragData[2] = vec4(0.0);
@@ -1312,6 +1313,16 @@ void main() {
 
 
 	if (!isSky) {
+		#ifdef ECLIPSE_RTGI_ACTIVE
+			float rtgiDepth = -viewPos.z;
+			float rtgiWeight = 0.0;
+			vec4 rtgiSample = vec4(0.0);
+			if (z > 0.0 && z < 1.0 && !isDHrange && !isWater && isEyeInWater == 0
+				&& rtgiStaticSurface(opaqueMasks) && rtgiDepth > 0.0) {
+				rtgiWeight = 1.0 - smoothstep(40.0, rtgiViewRange, rtgiDepth);
+			}
+		#endif
+
 		MinimumLightColor = MinimumLightColor + 0.7 * MinimumLightColor * dot(slopednormal, feetPlayerPos_normalized);
 
 		// idk why this do
@@ -1553,6 +1564,17 @@ void main() {
 				gi_color += mix(MinimumLightColor * (MIN_LIGHT_AMOUNT * 0.004 + nightVision*0.02), MinimumLightColor * (MIN_LIGHT_AMOUNT_INSIDE * 0.004 + nightVision*0.02), 1.0-lightmap.y);
 
 				Indirect_lighting = mix(Indirect_lighting, gi_color, photonicsFalloff);
+				#ifdef ECLIPSE_RTGI_ACTIVE
+					rtgiWeight *= 1.0 - photonicsFalloff;
+				#endif
+			#endif
+
+			#ifdef ECLIPSE_RTGI_ACTIVE
+				if (rtgiWeight > 0.0) {
+					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos);
+					// Contact only attenuates ambient sky light. Lamps and direct sun are added separately.
+					Indirect_lighting *= 1.0 - rtgiSample.a * RTGI_CONTACT_STRENGTH * rtgiWeight;
+				}
 			#endif
 		#endif
 
@@ -1649,7 +1671,12 @@ void main() {
 
 		// RTAO and/or SSGI
 		#if indirect_effect == SSRT_AO || indirect_effect == SSRT_AO_GI
-			if(!hand) Indirect_lighting = ApplySSRT(Indirect_lighting, blockLightColor, MinimumLightColor, viewPos, normal, vec3(bnoise, noise_2), lightmap.y, isGrass, isDHrange);
+			#ifdef ECLIPSE_RTGI_ACTIVE
+				float legacyBounce = 1.0 - rtgiWeight;
+			#else
+				const float legacyBounce = 1.0;
+			#endif
+			if(!hand) Indirect_lighting = ApplySSRT(Indirect_lighting, blockLightColor, MinimumLightColor, viewPos, normal, vec3(bnoise, noise_2), lightmap.y, isGrass, isDHrange, legacyBounce);
 		#endif
 
 
@@ -1699,8 +1726,26 @@ void main() {
 			#endif
 		#endif
 
+		#ifdef ECLIPSE_RTGI_ACTIVE
+			if (SpecularTex.g <= 229.5 / 255.0)
+				Indirect_lighting += rtgiSample.rgb * (RTGI_STRENGTH * rtgiWeight);
+		#endif
+
 		#if defined OVERWORLD_SHADER && defined DEFERRED_SPECULAR && (PUDDLE_MODE > 0 || ShaderSnow > 0)
 			if(!hand && !entities && !isWater) applyPuddles(worldPos, FlatNormals, lightmap.y, eyeInWater, albedo, normal, SpecularTex.r, SpecularTex.g, isShaderGrass, labPorosity);
+		#endif
+
+		#ifdef ECLIPSE_RTGI_ACTIVE
+			if (rtgiTileOrigin) {
+				vec4 sourceLighting = vec4(0.0);
+				if (rtgiWeight > 0.0) {
+					vec3 outgoingLight = SpecularTex.g <= 229.5 / 255.0
+						? max(Direct_lighting + blockLightColor, vec3(0.0)) * albedo : vec3(0.0);
+					Emission(outgoingLight, albedo, SpecularTex.a);
+					sourceLighting = vec4(clamp(outgoingLight, 0.0, 65504.0), 1.0);
+				}
+				rtgiWriteDirectLight(rtgiPixel / rtgiStride, sourceLighting);
+			}
 		#endif
 
 		vec3 FINAL_COLOR = (Indirect_lighting + Direct_lighting) * albedo;
@@ -1729,6 +1774,10 @@ void main() {
 		gl_FragData[0].rgb = FINAL_COLOR;
 
 	}else{
+		#ifdef ECLIPSE_RTGI_ACTIVE
+			if (rtgiTileOrigin) rtgiWriteDirectLight(rtgiPixel / rtgiStride, vec4(0.0));
+		#endif
+
 		vec3 Background = vec3(0.0);
 
 

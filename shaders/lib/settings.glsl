@@ -120,6 +120,10 @@ const float WATER_SIM_FRAMETIME = 1.0/float(WATER_SIM_FRAMERATE);
 #define SSRT_AO_GI 5
 
 #define indirect_effect SSAO_FILTERED // [VANILLA_AO SSAO_FILTERED SSAO_HQ GTAO SSRT_AO SSRT_AO_GI]
+#define RTGI
+#define RTGI_STRENGTH 0.65 // [0.25 0.5 0.65 0.8 1.0 1.25]
+#define RTGI_CONTACT_STRENGTH 0.20 // [0.0 0.10 0.20 0.30 0.40]
+#define RTGI_STEPS 8 // [8 12 16]
 
 #define AO_in_sunlight
 #define AO_Strength 1.0 // [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0]
