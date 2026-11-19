@@ -110,6 +110,9 @@ vec3 doBlockLightLighting(
 
     , bool glowframe
     , bool particles
+    #ifdef ECLIPSE_RTGI_SHADOW_LPV
+    , float blockVisibility
+    #endif
 ){
     lightmap = clamp(lightmap,0.0,1.0);
 
@@ -145,6 +148,10 @@ vec3 doBlockLightLighting(
         
         // outside the voxel volume, lerp to vanilla lighting as a fallback
         blockLight = mix(blockLight, lpvSample.rgb + lightColor * 2.5 * min(max(lightmap-0.999,0.0)/(1.0-0.999),1.0), voxelRangeFalloff);
+
+        #ifdef ECLIPSE_RTGI_SHADOW_LPV
+            blockLight *= blockVisibility;
+        #endif
 
         #ifdef Hand_Held_lights
             // create handheld lightsources

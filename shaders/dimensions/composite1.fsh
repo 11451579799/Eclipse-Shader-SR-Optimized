@@ -206,6 +206,9 @@ float convertHandDepth_2(in float depth, bool hand) {
 	#include "/lib/rtgi_buffers.glsl"
 	#ifdef ECLIPSE_RTGI_ACTIVE
 		#include "/lib/rtgi_composite.glsl"
+		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+			#define ECLIPSE_RTGI_SHADOW_LPV
+		#endif
 	#endif
 #endif
 #include "/lib/DistantHorizons_projections.glsl"
@@ -1317,6 +1320,7 @@ void main() {
 			float rtgiDepth = -viewPos.z;
 			float rtgiWeight = 0.0;
 			vec4 rtgiSample = vec4(0.0);
+			float rtgiBlockLightVisibility = 1.0;
 			if (z > 0.0 && z < 1.0 && !isDHrange && !isWater && isEyeInWater == 0
 				&& rtgiStaticSurface(opaqueMasks) && rtgiDepth > 0.0) {
 				rtgiWeight = 1.0 - smoothstep(40.0, rtgiViewRange, rtgiDepth);
@@ -1571,7 +1575,7 @@ void main() {
 
 			#ifdef ECLIPSE_RTGI_ACTIVE
 				if (rtgiWeight > 0.0) {
-					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos);
+					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos, rtgiBlockLightVisibility);
 					// Contact only attenuates ambient sky light. Lamps and direct sun are added separately.
 					Indirect_lighting *= 1.0 - rtgiSample.a * RTGI_CONTACT_STRENGTH * rtgiWeight;
 				}
@@ -1618,7 +1622,11 @@ void main() {
 			const vec3 lpvPos = vec3(0.0);
 		#endif
 		
-		vec3 blockLightColor = doBlockLightLighting(vec3(TORCH_R,TORCH_G,TORCH_B), lightmap.x, feetPlayerPos, lpvPos, viewPos, isDHrange, blueNoise(), FlatNormals, hand, glowframe, opaqueParticles);
+		vec3 blockLightColor = doBlockLightLighting(vec3(TORCH_R,TORCH_G,TORCH_B), lightmap.x, feetPlayerPos, lpvPos, viewPos, isDHrange, blueNoise(), FlatNormals, hand, glowframe, opaqueParticles
+			#ifdef ECLIPSE_RTGI_SHADOW_LPV
+				, mix(1.0, rtgiBlockLightVisibility, rtgiWeight)
+			#endif
+		);
 		Indirect_lighting += blockLightColor;
 
 		vec4 flashLightSpecularData = vec4(0.0);

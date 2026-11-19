@@ -121,6 +121,7 @@ const float WATER_SIM_FRAMETIME = 1.0/float(WATER_SIM_FRAMERATE);
 
 #define indirect_effect SSAO_FILTERED // [VANILLA_AO SSAO_FILTERED SSAO_HQ GTAO SSRT_AO SSRT_AO_GI]
 #define RTGI
+#define RTGI_BLOCK_SHADOWS
 #define RTGI_STRENGTH 0.65 // [0.25 0.5 0.65 0.8 1.0 1.25]
 #define RTGI_CONTACT_STRENGTH 0.20 // [0.0 0.10 0.20 0.30 0.40]
 #define RTGI_STEPS 8 // [8 12 16]
@@ -1397,4 +1398,10 @@ const vec3 aerochrome_color = mix(vec3(1.0, 0.0, 0.0), vec3(0.715, 0.303, 0.631)
 #ifdef MC_OS_MAC_VK
 	#undef SHADER_GRASS
 	#undef BEACON_FLOODFILL
+#endif
+
+#ifdef RTGI_BLOCK_SHADOWS
+	#if defined RTGI && defined LPV_ENABLED && defined IS_LPV_ENABLED && defined IRIS_FEATURE_CUSTOM_IMAGES && defined MC_GL_ARB_shader_image_load_store && !defined PHOTONICS && !defined VIVECRAFT && !defined PLANET_CURVATURE
+		#define ECLIPSE_RTGI_BLOCK_SHADOWS
+	#endif
 #endif

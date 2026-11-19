@@ -18,7 +18,6 @@ const vec2 workGroupsRender = vec2(0.33333334, 0.33333334);
 uniform sampler2D depthtex1;
 uniform sampler2D colortex1;
 uniform sampler2D colortex7;
-uniform sampler2D noisetex;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
@@ -33,10 +32,17 @@ uniform int isEyeInWater;
 
 #include "/lib/opaque_gbuffer.glsl"
 #include "/lib/rtgi_world.glsl"
+#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+	uniform sampler2D colortex8;
+	#include "/lib/rtgi_local_lights.glsl"
+#endif
 
 struct RtgiSurface {
 	vec3 viewPosition;
 	vec3 worldNormal;
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		float blockLightmap;
+	#endif
 };
 
 bool rtgiReadSurface(ivec2 pixel, float depth, vec2 inverseViewport, vec2 jitter, out RtgiSurface surface) {
@@ -49,6 +55,9 @@ bool rtgiReadSurface(ivec2 pixel, float depth, vec2 inverseViewport, vec2 jitter
 	vec4 view = gbufferProjectionInverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
 	surface.viewPosition = view.xyz / view.w;
 	surface.worldNormal = decode(vec2(decodeVec2(data.x).y, decodeVec2(data.y).y));
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		surface.blockLightmap = decodeVec2(data.z).y;
+	#endif
 	return surface.viewPosition.z < 0.0 && surface.viewPosition.z >= -rtgiViewRange;
 }
 
@@ -104,10 +113,19 @@ bool rtgiReproject(
 	return false;
 }
 
+uint rtgiHash(uint value) {
+	value = (value ^ (value >> 16u)) * 0x85ebca6bu;
+	value = (value ^ (value >> 13u)) * 0xc2b2ae35u;
+	return value ^ (value >> 16u);
+}
+
 vec3 rtgiDirection(ivec2 tile, vec3 normal) {
-	ivec2 noiseSize = max(textureSize(noisetex, 0), ivec2(1));
-	vec2 noise = texelFetch(noisetex, tile % noiseSize, 0).rg;
-	vec2 samplePoint = fract(noise + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
+	// The pack's cloud noise is spatially smooth. Independent phases keep nearby
+	// rays from converging to the same direction across an entire wall.
+	uint seed = uint(tile.x) + uint(tile.y) * 65536u;
+	uvec2 bits = uvec2(rtgiHash(seed), rtgiHash(seed ^ 0x9e3779b9u));
+	vec2 phase = vec2(bits >> 8u) * (1.0 / 16777216.0);
+	vec2 samplePoint = fract(phase + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
 	float radius = sqrt(samplePoint.x);
 	float phi = 6.283185307 * samplePoint.y;
 	vec3 axis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
@@ -212,6 +230,18 @@ void main() {
 		rtgiStoreTile(tile, evenFrame, vec4(0.0), vec4(0.0));
 		return;
 	}
+
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		float visibility = 1.0;
+		if (surface.blockLightmap > 0.05) {
+			vec3 packedNormal = texelFetch(colortex8, pixel, 0).xyz;
+			vec3 normal = normalize(vec3(decodeVec2(packedNormal.x).y, decodeVec2(packedNormal.y).y,
+				decodeVec2(packedNormal.z).y) * 2.0 - 1.0);
+			vec3 playerPosition = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz;
+			visibility = rtgiLocalLightVisibility(playerPosition, normal);
+		}
+		imageStore(rtgiBlockVisibility, tile, vec4(visibility));
+	#endif
 
 	bool historyAvailable = rtgiHistoryAvailable(renderSize);
 

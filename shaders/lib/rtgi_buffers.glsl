@@ -30,12 +30,18 @@ layout(std430, binding = 6) buffer RtgiFrameHistory {
 	layout(rgba16f) uniform image2D rtgiHistory1;
 	layout(rgba16f) uniform image2D rtgiSurface0;
 	layout(rgba16f) uniform image2D rtgiSurface1;
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		layout(r16f) uniform writeonly image2D rtgiBlockVisibility;
+	#endif
 #else
 	layout(rgba16f) uniform writeonly image2D rtgiLight;
 	layout(rgba16f) uniform readonly image2D rtgiHistory0;
 	layout(rgba16f) uniform readonly image2D rtgiHistory1;
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		layout(r16f) uniform readonly image2D rtgiBlockVisibility;
+	#endif
 #endif
 
 vec2 rtgiViewportSize() {

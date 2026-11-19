@@ -82,6 +82,8 @@ The pass runs before DLSS. It samples one cosine-weighted ray per 3×3 internal 
 
 The screen-first trace and world-space fallback are inspired by Ubisoft's Anvil lighting work. Eclipse uses OpenGL compute, its voxel grid and a single diffuse bounce. Glossy and mirror reflections use Eclipse's existing specular path. [Ubisoft's SIGGRAPH presentation](https://advances.realtimerendering.com/s2025/content/Advances%202025%20-%20Raytracing%20the%20world%20of%20Assassin%27s%20Creed%20Shadows.pdf)
 
+**Ray-traced Block Light Shadows** uses the LPV voxel grid to trace visibility to nearby static emitters such as torches. Solid blocks can cast shadows from those lights even if the emitter is outside the camera view. The shader uses LPV lighting when the light list is incomplete, a visible emitter can also contribute, or a region contains more emitters than the trace budget can resolve.
+
 # Incompatible Mods / Mods with issues
 - OptiFine
 - Iris/Oculus requires at least version 1.6.11 of the mod

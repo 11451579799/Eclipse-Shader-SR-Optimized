@@ -16,7 +16,7 @@ void rtgiWriteDirectLight(ivec2 tile, vec4 lighting) {
 	imageStore(rtgiLight, tile, lighting);
 }
 
-vec4 rtgiUpsample(ivec2 pixel, ivec2 renderSize, ivec2 tileSize, vec3 normal, vec3 viewPos) {
+vec4 rtgiUpsample(ivec2 pixel, ivec2 renderSize, ivec2 tileSize, vec3 normal, vec3 viewPos, out float blockVisibility) {
 	ivec2 center = min(pixel / rtgiStride, tileSize - 1);
 	ivec2 direction = ivec2(rtgiOctSign(vec2(pixel - rtgiTilePixel(center, renderSize))));
 	float viewDepth = -viewPos.z;
@@ -25,6 +25,9 @@ vec4 rtgiUpsample(ivec2 pixel, ivec2 renderSize, ivec2 tileSize, vec3 normal, ve
 	bool evenFrame = rtgiEvenFrame();
 	vec4 sum = vec4(0.0);
 	float weightSum = 0.0;
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		float visibilitySum = 0.0;
+	#endif
 
 	for (int y = 0; y < 2; ++y) {
 		for (int x = 0; x < 2; ++x) {
@@ -45,8 +48,15 @@ vec4 rtgiUpsample(ivec2 pixel, ivec2 renderSize, ivec2 tileSize, vec3 normal, ve
 			float weight = spatialWeight * depthWeight * depthWeight * normalWeight;
 			sum += lighting * weight;
 			weightSum += weight;
+			#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+				visibilitySum += imageLoad(rtgiBlockVisibility, tile).r * weight;
+			#endif
 		}
 	}
 
+	blockVisibility = 1.0;
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		if (weightSum > 1e-5) blockVisibility = visibilitySum / weightSum;
+	#endif
 	return sum / max(weightSum, 1e-5);
 }
