@@ -1,7 +1,4 @@
-#if defined LPV_ENABLED && defined IS_LPV_ENABLED && defined MC_GL_ARB_shader_image_load_store && !defined PHOTONICS && !defined PLANET_CURVATURE
-	#define ECLIPSE_RTGI_WORLD
-
-	#include "/lib/voxel_common.glsl"
+#ifdef ECLIPSE_RTGI_WORLD
 	#include "/lib/blocks.glsl"
 	#include "/lib/SSBOs.glsl"
 	#include "/lib/Shadow_Params.glsl"
@@ -15,13 +12,14 @@
 	uniform sampler2D shadowtex1;
 	uniform sampler2D shadowcolor0;
 	uniform usampler1D texBlockData;
+	#include "/lib/rtgi_voxels.glsl"
+	#include "/lib/rtgi_face_cache.glsl"
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		#include "/lib/rtgi_local_lights.glsl"
+	#endif
 	#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
 		uniform vec4 lightningBoltPosition;
 	#endif
-
-	bool rtgiWorldContains(ivec3 voxel) {
-		return all(greaterThanEqual(voxel, ivec3(0))) && all(lessThan(voxel, ivec3(VoxelSize)));
-	}
 
 	vec3 rtgiShadowBounce(vec3 facePosition, vec3 faceNormal, ivec3 voxel, vec3 voxelOffset) {
 		#ifdef CUSTOM_MOON_ROTATION
@@ -82,46 +80,48 @@
 		// The shadow map covers terrain. Fade the unresolved contribution in rain.
 		return toLinear(surface.rgb) * lightColor * ((incidence * 255.0 - 15.0) / 240.0) * (1.0 - rainStrength);
 	}
-#endif
 
-vec3 rtgiWorldBounce(vec3 viewPosition, vec3 worldNormal, vec3 worldDirection) {
-	#ifdef ECLIPSE_RTGI_WORLD
-		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
-			if (lightningBoltPosition.w > 0.0) return vec3(0.0);
-		#endif
-		// Keep positions camera-relative, including at large world coordinates.
-		vec3 cameraOffset = fract(cameraPosition);
-		vec3 voxelOffset = cameraOffset + float(VoxelSize / 2u);
-		vec3 playerPosition = (gbufferModelViewInverse * vec4(viewPosition, 1.0)).xyz;
-		vec3 origin = playerPosition + worldNormal * 0.06;
-		vec3 originVoxel = origin + cameraOffset;
-		ivec3 voxel = ivec3(floor(originVoxel)) + ivec3(VoxelSize / 2u);
-		if (!rtgiWorldContains(voxel)) return vec3(0.0);
+	bool rtgiVoxelReceiver(vec3 position, vec3 flatNormal) {
+		ivec3 voxel = ivec3(floor(position - flatNormal * rtgiRayBias));
+		if (!rtgiVoxelContains(voxel)) return false;
+		uint id = imageLoad(imgVoxelMask, voxel).r;
+		return rtgiFullVoxel(id) || (id >= BLOCK_DOOR_N && id <= BLOCK_DOOR_W)
+			|| id == BLOCK_SLAB_TOP || id == BLOCK_SLAB_BOTTOM
+			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W);
+	}
 
-		// The DDA enters a new cell at each step, so there is no self-hit in the starting cell.
-		ivec3 increment = ivec3(sign(worldDirection));
-		vec3 localOrigin = fract(originVoxel);
-		vec3 crossingStride = 1.0 / max(abs(worldDirection), vec3(1e-6));
-		vec3 crossing = mix(localOrigin, 1.0 - localOrigin, greaterThan(worldDirection, vec3(0.0))) * crossingStride;
-		crossing = mix(crossing, vec3(1e6), equal(increment, ivec3(0)));
+	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, out vec4 lighting, out vec3 firstBounce) {
+		lighting = vec4(0.0);
+		firstBounce = vec3(0.0);
+		if (dot(flatNormal, direction) <= 0.0) return rtgiRayMiss;
+		vec3 origin = position + flatNormal * rtgiRayBias;
+		RtgiVoxelHit hit;
+		vec3 transmission;
+		int result = rtgiTraceVoxels(origin, direction, 12.0, ivec3(-1), hit, transmission);
+		if (result != rtgiRayHit) return result;
 
-		for (int stepIndex = 0; stepIndex < 10; ++stepIndex) {
-			int axis = crossing.x <= crossing.y && crossing.x <= crossing.z ? 0 : (crossing.y <= crossing.z ? 1 : 2);
-			float travel = crossing[axis];
-			crossing[axis] += crossingStride[axis];
-			voxel[axis] += increment[axis];
-			if (!rtgiWorldContains(voxel) || travel > 10.0) break;
-
-			uint blockId = imageLoad(imgVoxelMask, voxel).r;
-			if (blockId == 0u) continue;
-			// Unknown or transmissive entries stop the approximate trace without supplying radiance.
-			if (blockId >= 2000u || (texelFetch(texBlockData, int(blockId), 0).g & 0x00ffffffu) != 0u) break;
-
-			vec3 faceNormal = vec3(0.0);
-			faceNormal[axis] = -float(increment[axis]);
-			vec3 facePosition = origin + travel * worldDirection;
-			return rtgiShadowBounce(facePosition, faceNormal, voxel, voxelOffset);
+		lighting.a = 1.0 - smoothstep(0.10, 2.0, hit.distance);
+		vec3 surface = origin + direction * hit.distance;
+		vec3 albedo;
+		vec3 bounce;
+		if (!rtgiLoadFace(rtgiFaceKey(hit.voxel, hit.normal, hit.blockId), albedo, bounce)) {
+			// A face enters the cache when first seen by the opaque pass.
+			albedo = vec3(0.68);
+			bounce = vec3(0.0);
 		}
-	#endif
-	return vec3(0.0);
-}
+
+		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
+			if (lightningBoltPosition.w <= 0.0)
+		#endif
+		firstBounce = rtgiShadowBounce(surface - rtgiVoxelOffset(), hit.normal, hit.voxel, rtgiVoxelOffset());
+		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+			// Connect the secondary hit directly to nearby lights, including lights
+			// outside the view. Each connection runs its own visibility query.
+			vec4 direct = rtgiLocalLighting(surface, hit.normal, hit.normal);
+			firstBounce += albedo * direct.rgb * direct.a;
+		#endif
+		firstBounce *= transmission;
+		lighting.rgb = firstBounce + transmission * albedo * bounce * 0.75;
+		return rtgiRayHit;
+	}
+#endif

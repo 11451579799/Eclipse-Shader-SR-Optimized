@@ -32,16 +32,15 @@ uniform int isEyeInWater;
 
 #include "/lib/opaque_gbuffer.glsl"
 #include "/lib/rtgi_world.glsl"
-#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+#ifdef ECLIPSE_RTGI_WORLD
 	uniform sampler2D colortex8;
-	#include "/lib/rtgi_local_lights.glsl"
 #endif
 
 struct RtgiSurface {
 	vec3 viewPosition;
 	vec3 worldNormal;
-	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-		float blockLightmap;
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 flatNormal;
 	#endif
 };
 
@@ -55,10 +54,12 @@ bool rtgiReadSurface(ivec2 pixel, float depth, vec2 inverseViewport, vec2 jitter
 	vec4 view = gbufferProjectionInverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
 	surface.viewPosition = view.xyz / view.w;
 	surface.worldNormal = decode(vec2(decodeVec2(data.x).y, decodeVec2(data.y).y));
-	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-		surface.blockLightmap = decodeVec2(data.z).y;
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 packedNormal = texelFetch(colortex8, pixel, 0).xyz;
+		surface.flatNormal = normalize(vec3(decodeVec2(packedNormal.x).y, decodeVec2(packedNormal.y).y,
+			decodeVec2(packedNormal.z).y) * 2.0 - 1.0);
 	#endif
-	return surface.viewPosition.z < 0.0 && surface.viewPosition.z >= -rtgiViewRange;
+	return surface.viewPosition.z < 0.0 && dot(surface.viewPosition, surface.viewPosition) <= rtgiViewRange * rtgiViewRange;
 }
 
 bool rtgiHistoryAvailable(ivec2 renderSize) {
@@ -228,20 +229,11 @@ void main() {
 	RtgiSurface surface;
 	if (isEyeInWater != 0 || !rtgiReadSurface(pixel, texelFetch(depthtex1, pixel, 0).r, 1.0 / viewport, jitter, surface)) {
 		rtgiStoreTile(tile, evenFrame, vec4(0.0), vec4(0.0));
+		#ifdef ECLIPSE_RTGI_WORLD
+			imageStore(rtgiFirstBounce, tile, vec4(0.0));
+		#endif
 		return;
 	}
-
-	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-		float visibility = 1.0;
-		if (surface.blockLightmap > 0.05) {
-			vec3 packedNormal = texelFetch(colortex8, pixel, 0).xyz;
-			vec3 normal = normalize(vec3(decodeVec2(packedNormal.x).y, decodeVec2(packedNormal.y).y,
-				decodeVec2(packedNormal.z).y) * 2.0 - 1.0);
-			vec3 playerPosition = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz;
-			visibility = rtgiLocalLightVisibility(playerPosition, normal);
-		}
-		imageStore(rtgiBlockVisibility, tile, vec4(visibility));
-	#endif
 
 	bool historyAvailable = rtgiHistoryAvailable(renderSize);
 
@@ -251,19 +243,38 @@ void main() {
 	vec2 previousPixel;
 	float hitDistance;
 	vec3 direction = rtgiDirection(tile, surface.worldNormal);
-	bool screenHit = rtgiTrace(surface, direction, pixel, renderSize, viewport, jitter, hit, hitDistance);
 	vec4 sampleLighting = vec4(0.0);
-	// Reuse the direct lighting recorded by the previous composite pass.
-	bool hasScreenLight = false;
-	if (screenHit) {
-		sampleLighting.a = (1.0 - smoothstep(0.16, 2.0, hitDistance));
-		if (historyAvailable && rtgiReproject(hit, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
-			vec4 direct = imageLoad(rtgiLight, historyTile);
-			hasScreenLight = direct.a > 0.0;
-			sampleLighting.rgb = max(direct.rgb, vec3(0.0));
+	bool needsScreen = true;
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 position = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
+		bool modeledReceiver = rtgiVoxelReceiver(position, surface.flatNormal);
+		vec3 firstBounce = vec3(0.0);
+		if (modeledReceiver) {
+			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, sampleLighting, firstBounce) == rtgiRayUnknown;
 		}
+	#endif
+	if (needsScreen) {
+		bool hasScreenLight = false;
+		if (rtgiTrace(surface, direction, pixel, renderSize, viewport, jitter, hit, hitDistance)) {
+			sampleLighting.a = 1.0 - smoothstep(0.16, 2.0, hitDistance);
+			if (historyAvailable && rtgiReproject(hit, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
+				vec4 direct = imageLoad(rtgiLight, historyTile);
+				hasScreenLight = direct.a > 0.0;
+				sampleLighting.rgb = max(direct.rgb, vec3(0.0));
+			}
+		}
+		#ifdef ECLIPSE_RTGI_WORLD
+			if (!hasScreenLight && !modeledReceiver) {
+				vec4 fallback;
+				rtgiWorldBounce(position, surface.flatNormal, direction, fallback, firstBounce);
+				sampleLighting.rgb = fallback.rgb;
+				sampleLighting.a = max(sampleLighting.a, fallback.a);
+			}
+		#endif
 	}
-	if (!hasScreenLight) sampleLighting.rgb = rtgiWorldBounce(surface.viewPosition, surface.worldNormal, direction);
+	#ifdef ECLIPSE_RTGI_WORLD
+		imageStore(rtgiFirstBounce, tile, vec4(firstBounce, float(modeledReceiver && !needsScreen)));
+	#endif
 
 	vec4 previousLighting = vec4(0.0);
 	float sampleCount = 1.0;
@@ -271,7 +282,7 @@ void main() {
 		previousLighting = evenFrame ? imageLoad(rtgiHistory1, historyTile) : imageLoad(rtgiHistory0, historyTile);
 		vec2 currentPixel = vec2(pixel) + 0.5 - jitter;
 		float screenMotion = length(currentPixel - previousPixel);
-		sampleCount += min(historyCount, mix(15.0, 2.0, smoothstep(1.0, 10.0, screenMotion)));
+		sampleCount += min(historyCount, mix(31.0, 5.0, smoothstep(1.0, 10.0, screenMotion)));
 	}
 
 	vec4 geometry = vec4(rtgiEncodeNormal(surface.worldNormal), sampleCount, -surface.viewPosition.z);

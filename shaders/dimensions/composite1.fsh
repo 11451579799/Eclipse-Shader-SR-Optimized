@@ -206,9 +206,6 @@ float convertHandDepth_2(in float depth, bool hand) {
 	#include "/lib/rtgi_buffers.glsl"
 	#ifdef ECLIPSE_RTGI_ACTIVE
 		#include "/lib/rtgi_composite.glsl"
-		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-			#define ECLIPSE_RTGI_SHADOW_LPV
-		#endif
 	#endif
 #endif
 #include "/lib/DistantHorizons_projections.glsl"
@@ -235,6 +232,15 @@ float convertHandDepth_2(in float depth, bool hand) {
 	#include "/lib/lpv_render.glsl"
 	#include "/lib/blocks.glsl"
 	#include "/lib/lpv_blocks.glsl"
+#endif
+
+#if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD
+	#include "/lib/rtgi_voxels.glsl"
+	#include "/lib/rtgi_face_cache.glsl"
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		#include "/lib/rtgi_local_lights.glsl"
+		#define ECLIPSE_RTGI_SHADOW_LPV
+	#endif
 #endif
 
 #define DEFERRED_SPECULAR
@@ -1320,10 +1326,10 @@ void main() {
 			float rtgiDepth = -viewPos.z;
 			float rtgiWeight = 0.0;
 			vec4 rtgiSample = vec4(0.0);
-			float rtgiBlockLightVisibility = 1.0;
-			if (z > 0.0 && z < 1.0 && !isDHrange && !isWater && isEyeInWater == 0
-				&& rtgiStaticSurface(opaqueMasks) && rtgiDepth > 0.0) {
-				rtgiWeight = 1.0 - smoothstep(40.0, rtgiViewRange, rtgiDepth);
+			bool rtgiReceiver = z > 0.0 && z < 1.0 && !isDHrange && !isWater && isEyeInWater == 0
+				&& rtgiStaticSurface(opaqueMasks) && rtgiDepth > 0.0;
+			if (rtgiReceiver) {
+				rtgiWeight = 1.0 - smoothstep(40.0, rtgiViewRange, length(viewPos));
 			}
 		#endif
 
@@ -1575,7 +1581,7 @@ void main() {
 
 			#ifdef ECLIPSE_RTGI_ACTIVE
 				if (rtgiWeight > 0.0) {
-					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos, rtgiBlockLightVisibility);
+					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos);
 					// Contact only attenuates ambient sky light. Lamps and direct sun are added separately.
 					Indirect_lighting *= 1.0 - rtgiSample.a * RTGI_CONTACT_STRENGTH * rtgiWeight;
 				}
@@ -1622,9 +1628,17 @@ void main() {
 			const vec3 lpvPos = vec3(0.0);
 		#endif
 		
+		#ifdef ECLIPSE_RTGI_SHADOW_LPV
+			vec4 tracedBlockLight = rtgiReceiver
+				? rtgiLocalLighting(feetPlayerPos + rtgiVoxelOffset(), FlatNormals, normal)
+				: vec4(0.0);
+			vec3 tracedBlockIrradiance = tracedBlockLight.rgb * tracedBlockLight.a;
+		#else
+			const vec3 tracedBlockIrradiance = vec3(0.0);
+		#endif
 		vec3 blockLightColor = doBlockLightLighting(vec3(TORCH_R,TORCH_G,TORCH_B), lightmap.x, feetPlayerPos, lpvPos, viewPos, isDHrange, blueNoise(), FlatNormals, hand, glowframe, opaqueParticles
 			#ifdef ECLIPSE_RTGI_SHADOW_LPV
-				, mix(1.0, rtgiBlockLightVisibility, rtgiWeight)
+				, tracedBlockLight.a
 			#endif
 		);
 		Indirect_lighting += blockLightColor;
@@ -1748,15 +1762,22 @@ void main() {
 				vec4 sourceLighting = vec4(0.0);
 				if (rtgiWeight > 0.0) {
 					vec3 outgoingLight = SpecularTex.g <= 229.5 / 255.0
-						? max(Direct_lighting + blockLightColor, vec3(0.0)) * albedo : vec3(0.0);
+						? max(Direct_lighting + blockLightColor + tracedBlockIrradiance, vec3(0.0)) * albedo : vec3(0.0);
 					Emission(outgoingLight, albedo, SpecularTex.a);
 					sourceLighting = vec4(clamp(outgoingLight, 0.0, 65504.0), 1.0);
+					#ifdef ECLIPSE_RTGI_WORLD
+						vec3 diffuseAlbedo = SpecularTex.g <= 229.5 / 255.0 ? clamp(albedo, 0.0, 1.0) : vec3(0.0);
+						vec4 firstBounce = imageLoad(rtgiFirstBounce, rtgiPixel / rtgiStride);
+						if (firstBounce.a > 0.0)
+							rtgiStoreFace(feetPlayerPos, FlatNormals, diffuseAlbedo, firstBounce.rgb);
+					#endif
 				}
 				rtgiWriteDirectLight(rtgiPixel / rtgiStride, sourceLighting);
 			}
 		#endif
 
-		vec3 FINAL_COLOR = (Indirect_lighting + Direct_lighting) * albedo;
+		// World-space direct shadows are independent of the screen-space ambient occlusion.
+		vec3 FINAL_COLOR = (Indirect_lighting + Direct_lighting + tracedBlockIrradiance) * albedo;
 
 		Emission(FINAL_COLOR, albedo, SpecularTex.a);
 		

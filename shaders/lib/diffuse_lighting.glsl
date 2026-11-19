@@ -111,7 +111,7 @@ vec3 doBlockLightLighting(
     , bool glowframe
     , bool particles
     #ifdef ECLIPSE_RTGI_SHADOW_LPV
-    , float blockVisibility
+    , float tracedLightWeight
     #endif
 ){
     lightmap = clamp(lightmap,0.0,1.0);
@@ -150,7 +150,7 @@ vec3 doBlockLightLighting(
         blockLight = mix(blockLight, lpvSample.rgb + lightColor * 2.5 * min(max(lightmap-0.999,0.0)/(1.0-0.999),1.0), voxelRangeFalloff);
 
         #ifdef ECLIPSE_RTGI_SHADOW_LPV
-            blockLight *= blockVisibility;
+            blockLight *= 1.0 - tracedLightWeight;
         #endif
 
         #ifdef Hand_Held_lights

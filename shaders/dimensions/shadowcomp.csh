@@ -33,10 +33,6 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
     #include "/lib/lpv_buffer.glsl"
     #include "/lib/voxel_common.glsl"
 
-    #if defined ECLIPSE_RTGI_BLOCK_SHADOWS && defined ECLIPSE_RTGI_LIGHT_TILE_WRITER
-        #include "/lib/rtgi_local_lights.glsl"
-    #endif
-
     int sumOf(ivec3 vec) {return vec.x + vec.y + vec.z;}
 
     int getSharedIndex(ivec3 pos) {
@@ -152,9 +148,6 @@ void main() {
             populateSharedVoxel(facePos, workGroupOffset, cameraOffset);
         }
 
-        #ifdef ECLIPSE_RTGI_LOCAL_LIGHTS
-            rtgiBeginLightTile();
-        #endif
         barrier();
 
         // Exit early if outside LPV buffer size
@@ -221,9 +214,5 @@ void main() {
         else
             imageStore(imgLpv2, imgCoord, lightValue);
 
-        #ifdef ECLIPSE_RTGI_LOCAL_LIGHTS
-            rtgiRegisterLight(imgCoord, lightRange);
-            rtgiEndLightTile();
-        #endif
     #endif
 }
