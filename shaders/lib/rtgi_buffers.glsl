@@ -50,12 +50,22 @@ ivec2 rtgiHistoryPixel(ivec2 tile, bool evenFrame, ivec2 extent) {
 	layout(rgba16f) uniform readonly image2D rtgiHistory;
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
-	layout(rgba16f) uniform writeonly image2D rtgiDenoised;
+	#ifdef ECLIPSE_RTGI_WIDE_FILTER
+		layout(rgba16f) uniform image2D rtgiDenoised;
+	#else
+		layout(rgba16f) uniform writeonly image2D rtgiDenoised;
+	#endif
 #else
 	layout(rgba16f) uniform writeonly image2D rtgiLight;
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
 	layout(rgba16f) uniform readonly image2D rtgiDenoised;
+#endif
+
+#if defined ECLIPSE_RTGI_WIDE_FILTER || (!defined ECLIPSE_RTGI_TRACE && !defined ECLIPSE_RTGI_FILTER)
+ivec2 rtgiFilteredPixel(ivec2 tile) {
+	return tile + ivec2(0, imageSize(rtgiDenoised).y / 2);
+}
 #endif
 
 vec2 rtgiViewportSize() {

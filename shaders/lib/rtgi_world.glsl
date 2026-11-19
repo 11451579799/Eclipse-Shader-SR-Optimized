@@ -145,9 +145,7 @@
 			uint id = hit.blockId;
 			vec3 lighting;
 			if (rtgiSolidEmitter(id) || rtgiTorch(id) || rtgiLantern(id)) {
-				vec4 lightData = unpackUnorm4x8(texelFetch(texBlockData, int(id), 0).r);
-				vec3 color = toLinear(lightData.rgb);
-				lighting = color * (55.0 * lightData.a / max(max(color.r, max(color.g, color.b)), 1e-5));
+				lighting = 3.25 * rtgiEmitterIntensity(texelFetch(texBlockData, int(id), 0).r);
 			} else {
 				lighting = rtgiShadeVoxelHit(hit, origin + hit.distance * direction);
 			}

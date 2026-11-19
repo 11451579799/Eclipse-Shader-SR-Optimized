@@ -107,6 +107,15 @@ void PopulateShadowVoxel(const in vec3 playerPos) {
 
 		voxelId = uint(blockID + 0.5);
 
+		if (voxelId == BLOCK_INVISIBLE_LIGHT) {
+			#ifdef IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
+				int level = clamp(int(at_midBlock.w + 0.5), 0, 15);
+				if (level == 0) return;
+				voxelId = uint(BLOCK_LIGHT_1 + level - 1);
+			#else
+				return;
+			#endif
+		}
 		#ifdef IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
 			if (voxelId == 0u && at_midBlock.w > 0) voxelId = uint(BLOCK_LIGHT_1 + at_midBlock.w - 1);
 		#endif

@@ -36,6 +36,14 @@ bool rtgiLantern(uint id) {
 	return id == BLOCK_LANTERN || id == BLOCK_SOUL_LANTERN || id == BLOCK_COPPER_LANTERN;
 }
 
+vec3 rtgiEmitterIntensity(uint packedEmission) {
+	// The LPV table adds one block to the configured range. Recover the level
+	// before converting it to intensity relative to a level-14 torch.
+	float level = clamp((float(packedEmission >> 24u) - 1.0) / 14.0, 0.0, 1.0);
+	vec3 color = toLinear(unpackUnorm4x8(packedEmission).rgb);
+	return color * (1.5 * level * level);
+}
+
 bool rtgiFullVoxel(uint id) {
 	return id == 1u || (id > 0u && id < 2000u
 		&& ((texelFetch(texBlockData, int(id), 0).g & 0x00ffffffu) == 0u || rtgiSolidEmitter(id)));

@@ -24,6 +24,10 @@ struct RtgiCellLights {
 	uvec4 bounds[4];
 };
 
+bool rtgiWeakerLight(float firstRank, uint first, float secondRank, uint second) {
+	return firstRank > secondRank || (firstRank == secondRank && first > second);
+}
+
 void rtgiIncludeUnresolved(inout RtgiCellLights lights, ivec3 lo, ivec3 hi, uint range, vec3 center) {
 	// Keep groups on opposite sides separate. One enclosing box could falsely
 	// cover an entire room between independent light banks.
@@ -70,13 +74,13 @@ RtgiCellLights rtgiGatherCellLights(ivec3 cell) {
 				uvec4 entries = imageLoad(rtgiEmitterCells, sourceCell);
 				if (entries.x == 0u) continue;
 				if ((entries.x & rtgiLightRecordFlag) != 0u) {
-					ivec3 lo = base + rtgiUnpackLightPosition(entries.x);
-					ivec3 hi = base + rtgiUnpackLightPosition(entries.y);
+					uvec4 untracked = imageLoad(rtgiEmitterCells, sourceCell + ivec3(0, 0, rtgiLightGridCells));
+					ivec3 lo = base + rtgiUnpackLightPosition(untracked.x);
+					ivec3 hi = base + rtgiUnpackLightPosition(untracked.y);
 					vec3 gap = rtgiBoxGap(receiverMin, receiverMax, vec3(lo), vec3(hi + 1));
-					uint range = (entries.x >> 24u) & 31u;
+					uint range = untracked.x >> 24u;
 					float reach = float(range) + rtgiLightFallbackFade;
 					if (dot(gap, gap) < reach * reach) rtgiIncludeUnresolved(lights, lo, hi, range, center);
-					continue;
 				}
 
 				for (int i = 0; i < 8; ++i) {
@@ -89,27 +93,22 @@ RtgiCellLights rtgiGatherCellLights(ivec3 cell) {
 					if (dot(gap, gap) >= reach * reach) continue;
 
 					uint packedLight = rtgiPackLightPosition(source) | (range << 24u);
-					if ((entry & rtgiUntrackedEmitter) == 0u) {
-						vec3 delta = vec3(source) + 0.5 - center;
-						float rank = dot(delta, delta) / float(range * range);
-						if (count < 4) {
-							ranks[count] = rank;
-							lights.known[count++] = packedLight;
-							continue;
-						}
-
-						int firstPair = ranks.x >= ranks.y ? 0 : 1;
-						int secondPair = ranks.z >= ranks.w ? 2 : 3;
-						int weakest = ranks[firstPair] >= ranks[secondPair] ? firstPair : secondPair;
-						if (rank < ranks[weakest]) {
-							ranks[weakest] = rank;
-							uint displaced = lights.known[weakest];
-							lights.known[weakest] = packedLight;
-							packedLight = displaced;
-						}
+					vec3 delta = vec3(source) + 0.5 - center;
+					float rank = (dot(gap, gap) + 0.0625 * dot(delta, delta)) / float(range * range);
+					if (count < 4) {
+						ranks[count] = rank;
+						lights.known[count++] = packedLight;
+						continue;
 					}
-					ivec3 omitted = rtgiUnpackLightPosition(packedLight);
-					rtgiIncludeUnresolved(lights, omitted, omitted, packedLight >> 24u, center);
+
+					int firstPair = rtgiWeakerLight(ranks.x, lights.known.x, ranks.y, lights.known.y) ? 0 : 1;
+					int secondPair = rtgiWeakerLight(ranks.z, lights.known.z, ranks.w, lights.known.w) ? 2 : 3;
+					int weakest = rtgiWeakerLight(ranks[firstPair], lights.known[firstPair], ranks[secondPair], lights.known[secondPair])
+						? firstPair : secondPair;
+					if (rtgiWeakerLight(ranks[weakest], lights.known[weakest], rank, packedLight)) {
+						ranks[weakest] = rank;
+						lights.known[weakest] = packedLight;
+					}
 				}
 			}
 		}

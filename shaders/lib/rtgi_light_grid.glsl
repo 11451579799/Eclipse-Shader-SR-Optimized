@@ -8,7 +8,6 @@ const float rtgiLightFallbackFade = 1.0;
 // Receiver records keep four lights in the first layer. The flag and spare bits
 // identify up to eight unresolved bounds, packed two per additional layer.
 const uint rtgiLightRecordFlag = 1u << 31u;
-const uint rtgiUntrackedEmitter = 1u << 14u;
 const uint rtgiPackedLightMask = 0x1fffffffu;
 
 ivec3 rtgiLightGridMin() {

@@ -23,7 +23,7 @@ float rtgiLightListConfidence(uvec4 record, ivec3 cell, vec3 origin, vec3 flatNo
 		vec3 hi = vec3(rtgiUnpackLightPosition(pair[slot + 1]) + 1);
 		vec3 front = mix(lo, hi, greaterThanEqual(flatNormal, vec3(0.0)));
 		// A group entirely behind the receiver cannot contribute direct light.
-		float facing = smoothstep(-rtgiLightFallbackFade, 0.0, dot(front - origin, flatNormal));
+		float facing = smoothstep(0.0, rtgiLightFallbackFade, dot(front - origin, flatNormal));
 		if (facing <= 0.0) continue;
 
 		float range = float(pair[slot] >> 24u);
@@ -60,8 +60,8 @@ uvec4 rtgiResolveLocalLights(vec3 origin, vec3 flatNormal, out float confidence)
 					* weights.x * weights.y * weights.z;
 				confidence += weight;
 
-				// Any trusted list in the overlap contains every light in range here.
-				// Only trace one list, so blending the confidence adds no shadow rays.
+				// Blend coverage for unsupported sources at cell boundaries.
+				// Trace a single bounded list of actual emitters.
 				record &= rtgiPackedLightMask;
 				if (weight > 0.0 && selected.x == 0u && record.x != 0u) selected = record;
 			}
@@ -100,7 +100,6 @@ vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal, vec2 disk, o
 	if (candidates.x == 0u) return vec4(0.0);
 
 	vec3 direct = vec3(0.0);
-	float influence = 0.0;
 	for (int slot = 0; slot < 4; ++slot) {
 		uint packedLight = candidates[slot];
 		if (packedLight == 0u) break;
@@ -115,7 +114,6 @@ vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal, vec2 disk, o
 		if (distanceSquared >= range * range) continue;
 
 		float distanceToLight = sqrt(max(distanceSquared, 1e-6));
-		influence = max(influence, smoothstep(0.0, 1.0, range - distanceToLight));
 		vec3 direction = delta / distanceToLight;
 		float radius = rtgiEmitterRadius(id);
 		if (dot(flatNormal, delta) < -radius) continue;
@@ -144,14 +142,13 @@ vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal, vec2 disk, o
 		if (visibility == rtgiRayUnknown) return vec4(0.0);
 		if (visibility == rtgiRayHit) continue;
 
-		vec3 color = toLinear(unpackUnorm4x8(texelFetch(texBlockData, int(id), 0).r).rgb);
-		color /= max(max(color.r, max(color.g, color.b)), 1e-5);
+		vec3 intensity = rtgiEmitterIntensity(texelFetch(texBlockData, int(id), 0).r);
 		float falloff = 1.0 - distanceSquared / (range * range);
 		// The finite source keeps the near field bounded and concentrates more
 		// of the visible light around the lamp instead of filling the entire room.
-		direct += color * transmission * (2.0 * incidence * falloff * falloff / (0.30 + distanceSquared));
+		direct += intensity * transmission * (2.0 * incidence * falloff * falloff / (0.30 + distanceSquared));
 	}
-	return vec4(direct, coverage * influence * clamp(confidence, 0.0, 1.0));
+	return vec4(direct, coverage * clamp(confidence, 0.0, 1.0));
 }
 
 vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal) {

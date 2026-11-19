@@ -48,7 +48,7 @@ vec4 rtgiUpsample(ivec2 pixel, ivec2 renderSize, ivec2 tileSize, vec3 normal, ve
 			float normalWeight = dot(normal, rtgiDecodeNormal(surface.xy));
 			if (normalWeight < 0.85) continue;
 
-			vec4 lighting = imageLoad(rtgiDenoised, tile);
+			vec4 lighting = imageLoad(rtgiDenoised, rtgiFilteredPixel(tile));
 			vec2 distanceInTiles = offset / float(rtgiStride);
 			float spatialWeight = 1.0 / (1.0 + 4.0 * dot(distanceInTiles, distanceInTiles));
 			float weight = spatialWeight * depthWeight * depthWeight * normalWeight;

@@ -1785,7 +1785,7 @@ void main() {
 					sourceLighting = vec4(clamp(outgoingLight, 0.0, 65504.0), 1.0);
 					#ifdef ECLIPSE_RTGI_WORLD
 						vec3 diffuseAlbedo = SpecularTex.g <= 229.5 / 255.0 ? clamp(albedo, 0.0, 1.0) : vec3(0.0);
-						vec3 indirectIrradiance = imageLoad(rtgiDenoised, rtgiPixel / rtgiStride).rgb;
+						vec3 indirectIrradiance = imageLoad(rtgiDenoised, rtgiFilteredPixel(rtgiPixel / rtgiStride)).rgb;
 						rtgiStoreFace(feetPlayerPos, FlatNormals, diffuseAlbedo, indirectIrradiance);
 					#endif
 				}
