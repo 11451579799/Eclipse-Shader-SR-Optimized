@@ -19,48 +19,131 @@ uniform vec3 cameraPosition;
 	const ivec3 workGroups = ivec3(5, 5, 5);
 #endif
 
-uvec4 rtgiGatherCellLights(ivec3 cell) {
+struct RtgiCellLights {
+	uvec4 known;
+	uvec4 bounds[4];
+};
+
+void rtgiIncludeUnresolved(inout RtgiCellLights lights, ivec3 lo, ivec3 hi, uint range, vec3 center) {
+	// Keep groups on opposite sides separate. One enclosing box could falsely
+	// cover an entire room between independent light banks.
+	ivec3 side = ivec3(greaterThanEqual(vec3(lo + hi + 1) * 0.5, center));
+	int octant = side.x + 2 * side.y + 4 * side.z;
+	int slot = (octant % 2) * 2;
+	uvec4 pair = lights.bounds[octant / 2];
+	if (pair[slot] != 0u) {
+		lo = min(lo, rtgiUnpackLightPosition(pair[slot]));
+		hi = max(hi, rtgiUnpackLightPosition(pair[slot + 1]));
+		range = max(range, pair[slot] >> 24u);
+	}
+
+	pair[slot] = rtgiPackLightPosition(lo) | (range << 24u);
+	pair[slot + 1] = rtgiPackLightPosition(hi);
+	lights.bounds[octant / 2] = pair;
+}
+
+RtgiCellLights rtgiGatherCellLights(ivec3 cell) {
+	RtgiCellLights lights = RtgiCellLights(uvec4(0u), uvec4[4](uvec4(0u), uvec4(0u), uvec4(0u), uvec4(0u)));
 	vec3 cellMin = vec3(cell * rtgiLightCellSize + rtgiLightGridMin());
 	vec3 cellMax = cellMin + float(rtgiLightCellSize);
+	// Shading can reuse this list on either side of the cell boundary.
+	vec3 receiverMin = cellMin - rtgiLightCellOverlap;
+	vec3 receiverMax = cellMax + rtgiLightCellOverlap;
+	vec3 center = (cellMin + cellMax) * 0.5;
 	vec3 camera = fract(cameraPosition) + float(VoxelSize / 2u);
-	vec3 cameraGap = rtgiCellGap(camera, cellMin, cellMax);
-	if (dot(cameraGap, cameraGap) >= rtgiLightCoverageRadius * rtgiLightCoverageRadius) return uvec4(0u);
+	vec3 cameraGap = rtgiCellGap(camera, receiverMin, receiverMax);
+	if (dot(cameraGap, cameraGap) >= rtgiLightCoverageRadius * rtgiLightCoverageRadius) return lights;
 
-	uvec4 candidates = uvec4(0u);
+	vec4 ranks = vec4(0.0);
 	int count = 0;
-	ivec3 first = max(cell - 2, ivec3(0));
-	ivec3 last = min(cell + 2, ivec3(rtgiLightGridCells - 1));
+	const float maxReach = rtgiLightRange + rtgiLightFallbackFade;
+	ivec3 first = max(cell - 3, ivec3(0));
+	ivec3 last = min(cell + 3, ivec3(rtgiLightGridCells - 1));
 	for (int z = first.z; z <= last.z; ++z) {
 		for (int y = first.y; y <= last.y; ++y) {
 			for (int x = first.x; x <= last.x; ++x) {
 				ivec3 sourceCell = ivec3(x, y, z);
+				ivec3 base = ivec3(cellMin) + (sourceCell - cell) * rtgiLightCellSize;
+				vec3 cellGap = rtgiBoxGap(receiverMin, receiverMax, vec3(base), vec3(base + rtgiLightCellSize));
+				if (dot(cellGap, cellGap) >= maxReach * maxReach) continue;
+
 				uvec4 entries = imageLoad(rtgiEmitterCells, sourceCell);
 				if (entries.x == 0u) continue;
-				if (entries.x == rtgiIncompleteLights) return uvec4(rtgiIncompleteLights);
+				if ((entries.x & rtgiLightRecordFlag) != 0u) {
+					ivec3 lo = base + rtgiUnpackLightPosition(entries.x);
+					ivec3 hi = base + rtgiUnpackLightPosition(entries.y);
+					vec3 gap = rtgiBoxGap(receiverMin, receiverMax, vec3(lo), vec3(hi + 1));
+					uint range = (entries.x >> 24u) & 31u;
+					float reach = float(range) + rtgiLightFallbackFade;
+					if (dot(gap, gap) < reach * reach) rtgiIncludeUnresolved(lights, lo, hi, range, center);
+					continue;
+				}
 
-				ivec3 base = ivec3(cellMin) + (sourceCell - cell) * rtgiLightCellSize;
 				for (int i = 0; i < 8; ++i) {
-					uint entry = (entries[i / 2] >> ((i % 2) * 14)) & 0x3fffu;
+					uint entry = (entries[i / 2] >> ((i % 2) * 15)) & 0x7fffu;
 					if (entry == 0u) break;
-					ivec3 source = base + ivec3(entry & 7u, (entry >> 3u) & 7u, (entry >> 6u) & 7u);
-					uint range = entry >> 9u;
-					// Measure from the source voxel bounds, including emitters off center.
-					vec3 gap = rtgiCellGap(vec3(source), cellMin - 1.0, cellMax);
-					float limit = min(float(range), rtgiLightRange);
-					if (dot(gap, gap) >= limit * limit) continue;
-					if (range == rtgiUntrackedRange || count == 4) return uvec4(rtgiIncompleteLights);
-					candidates[count++] = uint(source.x) | (uint(source.y) << 8u) | (uint(source.z) << 16u) | (range << 24u);
+					ivec3 source = base + rtgiEmitterVoxelOffset(entry);
+					uint range = (entry >> 9u) & 31u;
+					float reach = float(range) + rtgiLightFallbackFade;
+					vec3 gap = rtgiBoxGap(receiverMin, receiverMax, vec3(source), vec3(source + 1));
+					if (dot(gap, gap) >= reach * reach) continue;
+
+					uint packedLight = rtgiPackLightPosition(source) | (range << 24u);
+					if ((entry & rtgiUntrackedEmitter) == 0u) {
+						vec3 delta = vec3(source) + 0.5 - center;
+						float rank = dot(delta, delta) / float(range * range);
+						if (count < 4) {
+							ranks[count] = rank;
+							lights.known[count++] = packedLight;
+							continue;
+						}
+
+						int firstPair = ranks.x >= ranks.y ? 0 : 1;
+						int secondPair = ranks.z >= ranks.w ? 2 : 3;
+						int weakest = ranks[firstPair] >= ranks[secondPair] ? firstPair : secondPair;
+						if (rank < ranks[weakest]) {
+							ranks[weakest] = rank;
+							uint displaced = lights.known[weakest];
+							lights.known[weakest] = packedLight;
+							packedLight = displaced;
+						}
+					}
+					ivec3 omitted = rtgiUnpackLightPosition(packedLight);
+					rtgiIncludeUnresolved(lights, omitted, omitted, packedLight >> 24u, center);
 				}
 			}
 		}
 	}
-	return candidates;
+	return lights;
 }
 
 void main() {
 	ivec3 cell = ivec3(gl_GlobalInvocationID);
 	if (any(greaterThanEqual(cell, ivec3(rtgiLightGridCells)))) return;
-	imageStore(rtgiReceiverLights, cell, rtgiGatherCellLights(cell));
+	RtgiCellLights lights = rtgiGatherCellLights(cell);
+	uvec4 packedBounds = uvec4(0u);
+	uint boundCount = 0u;
+	for (int i = 0; i < 8; ++i) {
+		int fromSlot = (i % 2) * 2;
+		uvec4 pair = lights.bounds[i / 2];
+		if (pair[fromSlot] == 0u) continue;
+		int toSlot = int(boundCount & 1u) * 2;
+		packedBounds[toSlot] = pair[fromSlot];
+		packedBounds[toSlot + 1] = pair[fromSlot + 1];
+		if (toSlot == 2) {
+			imageStore(rtgiReceiverLights, cell + ivec3(0, 0, (1 + int(boundCount / 2u)) * rtgiLightGridCells), packedBounds);
+			packedBounds = uvec4(0u);
+		}
+		++boundCount;
+	}
+	if ((boundCount & 1u) != 0u) {
+		imageStore(rtgiReceiverLights, cell + ivec3(0, 0, (1 + int(boundCount / 2u)) * rtgiLightGridCells), packedBounds);
+	}
+	if (boundCount != 0u) {
+		lights.known.x |= rtgiLightRecordFlag;
+		lights.known.w |= (boundCount - 1u) << 29u;
+	}
+	imageStore(rtgiReceiverLights, cell, lights.known);
 }
 
 #else

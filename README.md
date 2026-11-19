@@ -82,7 +82,7 @@ The pass runs before DLSS. It samples one cosine-weighted ray per 3×3 internal 
 
 The hybrid trace is inspired by Ubisoft's Anvil lighting work. Eclipse uses OpenGL compute and its existing voxel grid. Glossy and mirror reflections use Eclipse's specular path. [Ubisoft's SIGGRAPH presentation](https://advances.realtimerendering.com/s2025/content/Advances%202025%20-%20Raytracing%20the%20world%20of%20Assassin%27s%20Creed%20Shadows.pdf)
 
-**Ray-traced Block Light Shadows** builds a shared set of nearby lights for each world cell. Each shaded point tests visibility to up to four lights, including lights outside the camera view. The geometry includes solid cubes and simplified shapes for doors, trapdoors, slabs and stairs. LPV continues to light cells with incomplete light lists or insufficient voxel coverage.
+**Ray-traced Block Light Shadows** builds overlapping lists of nearby lights. Each shaded point tests visibility to up to four lights, including lights outside the camera view. The geometry includes solid cubes and simplified shapes for doors, trapdoors, slabs and stairs. The shader checks the bounds and range of unresolved light groups against the receiver's position and normal, then blends into LPV where those groups can contribute or at the edge of voxel coverage.
 
 # Incompatible Mods / Mods with issues
 - OptiFine
