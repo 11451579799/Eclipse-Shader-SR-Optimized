@@ -71,16 +71,26 @@ uvec4 rtgiResolveLocalLights(vec3 origin, vec3 flatNormal, out float confidence)
 }
 
 vec3 rtgiEmitterOffset(uint id) {
-	if (id == BLOCK_TORCH || id == BLOCK_SOUL_TORCH || id == BLOCK_COPPER_TORCH || id == BLOCK_REDSTONE_TORCH_LIT)
-		return vec3(0.5, 0.625, 0.5);
-	if (id == BLOCK_LANTERN || id == BLOCK_SOUL_LANTERN || id == BLOCK_COPPER_LANTERN)
-		return vec3(0.5, 0.375, 0.5);
+	if (rtgiTorch(id)) return vec3(0.5, 0.625, 0.5);
+	if (rtgiLantern(id)) return vec3(0.5, 0.375, 0.5);
 	return vec3(0.5);
+}
+
+float rtgiEmitterRadius(uint id) {
+	if (rtgiTorch(id)) return 0.085;
+	if (rtgiLantern(id)) return 0.20;
+	return rtgiSolidEmitter(id) ? 0.42 : 0.12;
+}
+
+uint rtgiEmitterKey(ivec3 world, uint light) {
+	uint key = uint(world.x) * 0x8da6b343u ^ uint(world.y) * 0xd8163841u ^ uint(world.z) * 0xcb1ab31fu ^ light * 0x165667b1u;
+	return (key ^ (key >> 16u)) * 0x7feb352du;
 }
 
 // RGB is the sum of individually visible lights. Alpha controls the LPV fallback.
 // A valid zero sum therefore differs from a light list that could miss a contributor.
-vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal) {
+vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal, vec2 disk, out uint lightKey) {
+	lightKey = 0u;
 	vec3 origin = position + flatNormal * rtgiRayBias;
 	float coverage = rtgiLocalLightCoverage(origin);
 	if (coverage <= 0.0) return vec4(0.0);
@@ -107,6 +117,24 @@ vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal) {
 		float distanceToLight = sqrt(max(distanceSquared, 1e-6));
 		influence = max(influence, smoothstep(0.0, 1.0, range - distanceToLight));
 		vec3 direction = delta / distanceToLight;
+		float radius = rtgiEmitterRadius(id);
+		if (dot(flatNormal, delta) < -radius) continue;
+		ivec3 world = source - ivec3(VoxelSize / 2u) + ivec3(floor(cameraPosition));
+		uint key = rtgiEmitterKey(world, id | (uint(packedLight >> 24u) << 16u));
+		lightKey ^= key;
+
+		if (any(notEqual(disk, vec2(0.0)))) {
+			// Orient the virtual emitting disk toward the receiver. The endpoint
+			// remains inside the source block for both lamps and solid emitters.
+			vec3 axis = abs(direction.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+			vec3 tangent = normalize(cross(axis, direction));
+			vec3 bitangent = cross(direction, tangent);
+			vec2 samplePoint = (key & 1u) == 0u ? disk : vec2(-disk.y, disk.x);
+			delta += radius * (tangent * samplePoint.x + bitangent * samplePoint.y);
+			distanceToLight = max(length(delta), 1e-4);
+			direction = delta / distanceToLight;
+		}
+
 		float incidence = dot(normal, direction);
 		if (incidence <= 0.0 || dot(flatNormal, direction) <= 0.0) continue;
 
@@ -119,7 +147,14 @@ vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal) {
 		vec3 color = toLinear(unpackUnorm4x8(texelFetch(texBlockData, int(id), 0).r).rgb);
 		color /= max(max(color.r, max(color.g, color.b)), 1e-5);
 		float falloff = 1.0 - distanceSquared / (range * range);
-		direct += color * transmission * (3.0 * incidence * falloff * falloff / (1.0 + distanceSquared));
+		// The finite source keeps the near field bounded and concentrates more
+		// of the visible light around the lamp instead of filling the entire room.
+		direct += color * transmission * (2.0 * incidence * falloff * falloff / (0.30 + distanceSquared));
 	}
 	return vec4(direct, coverage * influence * clamp(confidence, 0.0, 1.0));
+}
+
+vec4 rtgiLocalLighting(vec3 position, vec3 flatNormal, vec3 normal) {
+	uint unusedKey;
+	return rtgiLocalLighting(position, flatNormal, normal, vec2(0.0), unusedKey);
 }

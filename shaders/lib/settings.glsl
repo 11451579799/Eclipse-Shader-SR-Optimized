@@ -122,6 +122,8 @@ const float WATER_SIM_FRAMETIME = 1.0/float(WATER_SIM_FRAMERATE);
 #define indirect_effect SSAO_FILTERED // [VANILLA_AO SSAO_FILTERED SSAO_HQ GTAO SSRT_AO SSRT_AO_GI]
 #define RTGI
 #define RTGI_BLOCK_SHADOWS
+#define RTGI_SOFT_SHADOWS
+#define RTGI_REFLECTIONS
 #define RTGI_STRENGTH 0.65 // [0.0 0.25 0.5 0.65 0.8 1.0 1.25]
 #define RTGI_CONTACT_STRENGTH 0.20 // [0.0 0.10 0.20 0.30 0.40]
 #define RTGI_STEPS 8 // [8 12 16]
@@ -1404,5 +1406,8 @@ const vec3 aerochrome_color = mix(vec3(1.0, 0.0, 0.0), vec3(0.715, 0.303, 0.631)
 	#define ECLIPSE_RTGI_WORLD
 	#ifdef RTGI_BLOCK_SHADOWS
 		#define ECLIPSE_RTGI_BLOCK_SHADOWS
+		#ifdef RTGI_SOFT_SHADOWS
+			#define ECLIPSE_RTGI_SOFT_SHADOWS
+		#endif
 	#endif
 #endif

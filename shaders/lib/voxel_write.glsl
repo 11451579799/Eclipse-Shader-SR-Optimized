@@ -183,6 +183,12 @@ void PopulateShadowVoxel(const in vec3 playerPos) {
 
 	if (voxelId > 0u){
 		SetVoxelBlock(voxelPos, voxelId);
+		#ifdef ECLIPSE_RTGI_MATERIAL_CAPTURE
+			if (renderStage == MC_RENDER_STAGE_TERRAIN_SOLID || renderStage == MC_RENDER_STAGE_TERRAIN_CUTOUT
+				|| renderStage == MC_RENDER_STAGE_TERRAIN_CUTOUT_MIPPED) {
+				rtgiCaptureVoxelMaterial(voxelPos);
+			}
+		#endif
 	}
 		
 }

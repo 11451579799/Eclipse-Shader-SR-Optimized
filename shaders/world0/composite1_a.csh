@@ -25,7 +25,7 @@ vec4 rtgiFilterSurface(ivec2 tile, bool evenFrame) {
 }
 
 vec4 rtgiFilterHistory(ivec2 tile, bool evenFrame) {
-	return evenFrame ? imageLoad(rtgiHistory0, tile) : imageLoad(rtgiHistory1, tile);
+	return imageLoad(rtgiHistory, rtgiHistoryPixel(tile, evenFrame, imageSize(rtgiHistory)));
 }
 
 struct RtgiFilterGuide {

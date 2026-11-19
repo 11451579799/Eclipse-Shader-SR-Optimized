@@ -1,24 +1,29 @@
 #ifdef ECLIPSE_RTGI_WORLD
-	#include "/lib/blocks.glsl"
-	#include "/lib/SSBOs.glsl"
-	#include "/lib/Shadow_Params.glsl"
-	#include "/lib/color_transforms.glsl"
+	#ifdef ECLIPSE_RTGI_TRACE
+		#include "/lib/blocks.glsl"
+		#include "/lib/SSBOs.glsl"
+		#include "/lib/Shadow_Params.glsl"
+		#include "/lib/color_transforms.glsl"
 
-	uniform mat4 shadowProjection;
-	#ifndef CUSTOM_MOON_ROTATION
-		uniform mat4 shadowModelView;
+		uniform mat4 shadowProjection;
+		#ifndef CUSTOM_MOON_ROTATION
+			uniform mat4 shadowModelView;
+		#endif
+		uniform sampler2D shadowcolor0;
+		uniform usampler1D texBlockData;
+		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
+			uniform vec4 lightningBoltPosition;
+		#endif
+	#elif !defined TRANSLUCENT_COLORED_SHADOWS
+		uniform sampler2D shadowcolor0;
 	#endif
 	uniform sampler2D shadowtex0;
 	uniform sampler2D shadowtex1;
-	uniform sampler2D shadowcolor0;
-	uniform usampler1D texBlockData;
 	#include "/lib/rtgi_voxels.glsl"
+	#include "/lib/rtgi_voxel_material.glsl"
 	#include "/lib/rtgi_face_cache.glsl"
 	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
 		#include "/lib/rtgi_local_lights.glsl"
-	#endif
-	#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
-		uniform vec4 lightningBoltPosition;
 	#endif
 
 	vec3 rtgiShadowBounce(vec3 facePosition, vec3 faceNormal, ivec3 voxel, vec3 voxelOffset) {
@@ -90,9 +95,28 @@
 			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W);
 	}
 
-	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, out vec4 lighting, out vec3 firstBounce) {
+	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface) {
+		vec3 albedo;
+		vec3 bounce;
+		if (!rtgiLoadFace(rtgiFaceKey(hit.voxel, hit.normal, hit.blockId), albedo, bounce)) {
+			albedo = rtgiVoxelAlbedoAt(hit.voxel, hit.normal);
+			bounce = vec3(0.0);
+		}
+
+		vec3 directLight = vec3(0.0);
+		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
+			if (lightningBoltPosition.w <= 0.0)
+		#endif
+		directLight = rtgiShadowBounce(surface - rtgiVoxelOffset(), hit.normal, hit.voxel, rtgiVoxelOffset());
+		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+			vec4 local = rtgiLocalLighting(surface, hit.normal, hit.normal);
+			directLight += albedo * local.rgb * local.a;
+		#endif
+		return directLight + albedo * bounce * 0.60;
+	}
+
+	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, out vec4 lighting) {
 		lighting = vec4(0.0);
-		firstBounce = vec3(0.0);
 		if (dot(flatNormal, direction) <= 0.0) return rtgiRayMiss;
 		vec3 origin = position + flatNormal * rtgiRayBias;
 		RtgiVoxelHit hit;
@@ -101,27 +125,33 @@
 		if (result != rtgiRayHit) return result;
 
 		lighting.a = 1.0 - smoothstep(0.10, 2.0, hit.distance);
-		vec3 surface = origin + direction * hit.distance;
-		vec3 albedo;
-		vec3 bounce;
-		if (!rtgiLoadFace(rtgiFaceKey(hit.voxel, hit.normal, hit.blockId), albedo, bounce)) {
-			// A face enters the cache when first seen by the opaque pass.
-			albedo = vec3(0.68);
-			bounce = vec3(0.0);
-		}
-
-		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
-			if (lightningBoltPosition.w <= 0.0)
-		#endif
-		firstBounce = rtgiShadowBounce(surface - rtgiVoxelOffset(), hit.normal, hit.voxel, rtgiVoxelOffset());
-		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-			// Connect the secondary hit directly to nearby lights, including lights
-			// outside the view. Each connection runs its own visibility query.
-			vec4 direct = rtgiLocalLighting(surface, hit.normal, hit.normal);
-			firstBounce += albedo * direct.rgb * direct.a;
-		#endif
-		firstBounce *= transmission;
-		lighting.rgb = firstBounce + transmission * albedo * bounce * 0.75;
+		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance);
 		return rtgiRayHit;
 	}
+
+	#if defined RTGI_REFLECTIONS && !defined ECLIPSE_RTGI_TRACE
+		vec4 rtgiWorldReflection(vec3 playerPosition, vec3 flatNormal, vec3 direction, float roughness) {
+			if (dot(flatNormal, direction) <= 0.0) return vec4(0.0);
+			float coverage = 1.0 - smoothstep(36.0, 44.0, length(playerPosition));
+			if (coverage <= 0.0) return vec4(0.0);
+
+			vec3 origin = playerPosition + rtgiVoxelOffset() + flatNormal * rtgiRayBias;
+			float maxDistance = mix(16.0, 8.0, smoothstep(0.02, 0.42, roughness));
+			RtgiVoxelHit hit;
+			vec3 transmission;
+			if (rtgiTraceVoxels(origin, direction, maxDistance, ivec3(-1), true, hit, transmission) != rtgiRayHit)
+				return vec4(0.0);
+
+			uint id = hit.blockId;
+			vec3 lighting;
+			if (rtgiSolidEmitter(id) || rtgiTorch(id) || rtgiLantern(id)) {
+				vec4 lightData = unpackUnorm4x8(texelFetch(texBlockData, int(id), 0).r);
+				vec3 color = toLinear(lightData.rgb);
+				lighting = color * (55.0 * lightData.a / max(max(color.r, max(color.g, color.b)), 1e-5));
+			} else {
+				lighting = rtgiShadeVoxelHit(hit, origin + hit.distance * direction);
+			}
+			return vec4(lighting * transmission, coverage * (1.0 - smoothstep(maxDistance * 0.75, maxDistance, hit.distance)));
+		}
+	#endif
 #endif

@@ -28,6 +28,14 @@ bool rtgiSolidEmitter(uint id) {
 		|| (id >= BLOCK_LAMP_LIT_BLACK && id <= BLOCK_LAMP_LIT_YELLOW);
 }
 
+bool rtgiTorch(uint id) {
+	return id == BLOCK_TORCH || id == BLOCK_SOUL_TORCH || id == BLOCK_COPPER_TORCH || id == BLOCK_REDSTONE_TORCH_LIT;
+}
+
+bool rtgiLantern(uint id) {
+	return id == BLOCK_LANTERN || id == BLOCK_SOUL_LANTERN || id == BLOCK_COPPER_LANTERN;
+}
+
 bool rtgiFullVoxel(uint id) {
 	return id == 1u || (id > 0u && id < 2000u
 		&& ((texelFetch(texBlockData, int(id), 0).g & 0x00ffffffu) == 0u || rtgiSolidEmitter(id)));
@@ -98,7 +106,7 @@ bool rtgiPartialShape(uint id, vec3 origin, vec3 invDirection, bvec3 parallel,
 	return true;
 }
 
-int rtgiTraceVoxels(vec3 origin, vec3 direction, float maxDistance, ivec3 lightVoxel,
+int rtgiTraceVoxels(vec3 origin, vec3 direction, float maxDistance, ivec3 lightVoxel, bool traceEmitterShapes,
 	out RtgiVoxelHit hit, out vec3 transmission) {
 	ivec3 voxel = ivec3(floor(origin));
 	vec3 directionSign = sign(direction);
@@ -122,7 +130,13 @@ int rtgiTraceVoxels(vec3 origin, vec3 direction, float maxDistance, ivec3 lightV
 			int hitAxis = -1;
 			float nearest = maxDistance;
 			if (!rtgiPartialShape(id, origin - vec3(voxel), invDirection, parallel, nearest, hitAxis)) {
-				if (stepIndex > 0 && rtgiFullVoxel(id)) {
+				if (traceEmitterShapes && rtgiLantern(id)) {
+					rtgiIntersectBox(origin - vec3(voxel), invDirection, parallel,
+						vec3(0.3125, 0.0, 0.3125), vec3(0.6875, 0.5, 0.6875), nearest, hitAxis);
+				} else if (traceEmitterShapes && rtgiTorch(id)) {
+					rtgiIntersectBox(origin - vec3(voxel), invDirection, parallel,
+						vec3(0.4375, 0.0, 0.4375), vec3(0.5625, 0.625, 0.5625), nearest, hitAxis);
+				} else if (stepIndex > 0 && rtgiFullVoxel(id)) {
 					nearest = entry;
 					hitAxis = entryAxis;
 				} else if (stepIndex > 0 && id > BLOCK_GLASS && id <= BLOCK_GLASS_YELLOW) {
@@ -147,4 +161,9 @@ int rtgiTraceVoxels(vec3 origin, vec3 direction, float maxDistance, ivec3 lightV
 		crossing += crossed * stride;
 	}
 	return rtgiRayUnknown;
+}
+
+int rtgiTraceVoxels(vec3 origin, vec3 direction, float maxDistance, ivec3 lightVoxel,
+	out RtgiVoxelHit hit, out vec3 transmission) {
+	return rtgiTraceVoxels(origin, direction, maxDistance, lightVoxel, false, hit, transmission);
 }

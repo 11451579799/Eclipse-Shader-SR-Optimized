@@ -24,18 +24,30 @@ layout(std430, binding = 6) buffer RtgiFrameHistory {
 	float rtgiPreviousRain;
 };
 
+// Iris limits the pack to 16 custom images. Store each history's two
+// frame banks in the top and bottom halves of a single image.
+ivec2 rtgiHistoryPixel(ivec2 tile, bool evenFrame, ivec2 extent) {
+	return tile + ivec2(0, evenFrame ? 0 : extent.y / 2);
+}
+
+#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+	vec4 rtgiUnpackDirect(uvec4 sampleData) {
+		return vec4(unpackHalf2x16(sampleData.x), unpackHalf2x16(sampleData.y));
+	}
+	#ifdef ECLIPSE_RTGI_TRACE
+		layout(rgba32ui) uniform uimage2D rtgiDirect;
+	#elif !defined ECLIPSE_RTGI_FILTER
+		uniform usampler2D texRtgiDirect;
+	#endif
+#endif
+
 #ifdef ECLIPSE_RTGI_TRACE
 	layout(rgba16f) uniform readonly image2D rtgiLight;
-	layout(rgba16f) uniform image2D rtgiHistory0;
-	layout(rgba16f) uniform image2D rtgiHistory1;
+	layout(rgba16f) uniform image2D rtgiHistory;
 	layout(rgba16f) uniform image2D rtgiSurface0;
 	layout(rgba16f) uniform image2D rtgiSurface1;
-	#ifdef ECLIPSE_RTGI_WORLD
-		layout(rgba16f) uniform writeonly image2D rtgiFirstBounce;
-	#endif
 #elif defined ECLIPSE_RTGI_FILTER
-	layout(rgba16f) uniform readonly image2D rtgiHistory0;
-	layout(rgba16f) uniform readonly image2D rtgiHistory1;
+	layout(rgba16f) uniform readonly image2D rtgiHistory;
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
 	layout(rgba16f) uniform writeonly image2D rtgiDenoised;
@@ -44,9 +56,6 @@ layout(std430, binding = 6) buffer RtgiFrameHistory {
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
 	layout(rgba16f) uniform readonly image2D rtgiDenoised;
-	#ifdef ECLIPSE_RTGI_WORLD
-		layout(rgba16f) uniform readonly image2D rtgiFirstBounce;
-	#endif
 #endif
 
 vec2 rtgiViewportSize() {

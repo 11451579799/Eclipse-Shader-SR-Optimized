@@ -12,7 +12,9 @@ layout(local_size_x = 128) in;
 const ivec3 workGroups = ivec3(512, 1, 1);
 
 void main() {
-	rtgiFaces[gl_GlobalInvocationID.x].data.x = 0u;
+	uint slot = gl_GlobalInvocationID.x;
+	rtgiFaces[slot].data.x = 0u;
+	rtgiFaces[slot + rtgiFaceCacheSize].data.x = 0u;
 }
 
 #else

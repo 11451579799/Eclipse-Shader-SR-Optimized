@@ -235,11 +235,12 @@ float convertHandDepth_2(in float depth, bool hand) {
 #endif
 
 #if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD
-	#include "/lib/rtgi_voxels.glsl"
-	#include "/lib/rtgi_face_cache.glsl"
+	#include "/lib/rtgi_world.glsl"
 	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-		#include "/lib/rtgi_local_lights.glsl"
 		#define ECLIPSE_RTGI_SHADOW_LPV
+	#endif
+	#ifdef RTGI_REFLECTIONS
+		#define ECLIPSE_RTGI_REFLECTIONS
 	#endif
 #endif
 
@@ -1326,6 +1327,10 @@ void main() {
 			float rtgiDepth = -viewPos.z;
 			float rtgiWeight = 0.0;
 			vec4 rtgiSample = vec4(0.0);
+			#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+				vec4 rtgiDirectSample = vec4(0.0);
+				float rtgiDirectWeight = 0.0;
+			#endif
 			bool rtgiReceiver = z > 0.0 && z < 1.0 && !isDHrange && !isWater && isEyeInWater == 0
 				&& rtgiStaticSurface(opaqueMasks) && rtgiDepth > 0.0;
 			if (rtgiReceiver) {
@@ -1581,7 +1586,11 @@ void main() {
 
 			#ifdef ECLIPSE_RTGI_ACTIVE
 				if (rtgiWeight > 0.0) {
-					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos);
+					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos
+						#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+							, rtgiDirectSample, rtgiDirectWeight
+						#endif
+					);
 					// Contact only attenuates ambient sky light. Lamps and direct sun are added separately.
 					Indirect_lighting *= 1.0 - rtgiSample.a * RTGI_CONTACT_STRENGTH * rtgiWeight;
 				}
@@ -1629,10 +1638,19 @@ void main() {
 		#endif
 		
 		#ifdef ECLIPSE_RTGI_SHADOW_LPV
-			vec4 tracedBlockLight = rtgiReceiver
-				? rtgiLocalLighting(feetPlayerPos + rtgiVoxelOffset(), FlatNormals, normal)
-				: vec4(0.0);
-			vec3 tracedBlockIrradiance = tracedBlockLight.rgb * tracedBlockLight.a;
+			vec4 tracedBlockLight = vec4(0.0);
+			if (rtgiReceiver) {
+				#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+					if (rtgiDirectWeight > 0.025) {
+						tracedBlockLight = rtgiDirectSample;
+					} else
+				#endif
+				{
+					tracedBlockLight = rtgiLocalLighting(feetPlayerPos + rtgiVoxelOffset(), FlatNormals, normal);
+					tracedBlockLight.rgb *= tracedBlockLight.a;
+				}
+			}
+			vec3 tracedBlockIrradiance = tracedBlockLight.rgb;
 		#else
 			const vec3 tracedBlockIrradiance = vec3(0.0);
 		#endif
@@ -1767,9 +1785,8 @@ void main() {
 					sourceLighting = vec4(clamp(outgoingLight, 0.0, 65504.0), 1.0);
 					#ifdef ECLIPSE_RTGI_WORLD
 						vec3 diffuseAlbedo = SpecularTex.g <= 229.5 / 255.0 ? clamp(albedo, 0.0, 1.0) : vec3(0.0);
-						vec4 firstBounce = imageLoad(rtgiFirstBounce, rtgiPixel / rtgiStride);
-						if (firstBounce.a > 0.0)
-							rtgiStoreFace(feetPlayerPos, FlatNormals, diffuseAlbedo, firstBounce.rgb);
+						vec3 indirectIrradiance = imageLoad(rtgiDenoised, rtgiPixel / rtgiStride).rgb;
+						rtgiStoreFace(feetPlayerPos, FlatNormals, diffuseAlbedo, indirectIrradiance);
 					#endif
 				}
 				rtgiWriteDirectLight(rtgiPixel / rtgiStride, sourceLighting);
@@ -1791,7 +1808,13 @@ void main() {
 			vec4 reflections = vec4(0.0,0.0,0.0,1.0);
 			float SunReflectionAlpha = 0.0;
 			
-			FINAL_COLOR = specularReflections(viewPos, feetPlayerPos, feetPlayerPos_normalized, WsunVec, specularNoises, FlatNormals, specularNormal, SpecularTex.r, SpecularTex.g, albedo, FINAL_COLOR, DirectLightColor*shadowColor*shadowColor, lightmap.y, hand, reflections, SunReflectionAlpha, isShaderGrass, flashLightSpecularData);
+			FINAL_COLOR = specularReflections(viewPos, feetPlayerPos, feetPlayerPos_normalized, WsunVec, specularNoises,
+				FlatNormals, specularNormal, SpecularTex.r, SpecularTex.g, albedo, FINAL_COLOR,
+				DirectLightColor * shadowColor * shadowColor, lightmap.y, hand, reflections, SunReflectionAlpha, isShaderGrass,
+				#ifdef ECLIPSE_RTGI_REFLECTIONS
+					rtgiReceiver,
+				#endif
+				flashLightSpecularData);
 
 			#if defined DEFERRED_SPECULAR && defined DENOISED_REFLECTIONS
 			gl_FragData[1] = reflections;

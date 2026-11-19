@@ -2150,12 +2150,18 @@ vec4 getEnvironmentReflections(
 	float roughness,
 	inout float backgroundReflectMask,
 	inout vec3 backgroundTint
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+		, out float screenReliability
+	#endif
 	#ifdef FORWARD_SPECULAR
 	,bool isWater
 	#endif
 
 ){
 	vec4 reflection = vec4(0.0);
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+		screenReliability = 0.0;
+	#endif
 	float reflectionLength = 0.0;
 
 	float quality = 1.0f;
@@ -2202,6 +2208,10 @@ vec4 getEnvironmentReflections(
 	previousPosition.xy = projMAD(projMatrix, previousPosition).xy / -previousPosition.z * 0.5 + 0.5;
 	
 	if (previousPosition.x > 0.0 && previousPosition.y > 0.0 && previousPosition.x < 1.0 && previousPosition.y < 1.0) {
+		#ifdef ECLIPSE_RTGI_REFLECTIONS
+			vec2 edge = min(previousPosition.xy, 1.0 - previousPosition.xy);
+			screenReliability = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+		#endif
 		if(raytracePos.z > 0.9999999) backgroundReflectMask = 1.0;
 
 		#if defined OVERWORLD_SHADER
@@ -2318,7 +2328,10 @@ vec3 specularReflections(
 	, inout float SunReflectionAlpha
 	, in bool isShaderGrass
 	#endif
-	
+
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+	, in bool worldReflectionReceiver
+	#endif
 	,in vec4 flashLight_stuff
 
 ){
@@ -2392,7 +2405,7 @@ vec3 specularReflections(
 		SunReflectionAlpha = backgroundReflectMask;
 	#endif
 
-	#if (defined DEFERRED_BACKGROUND_REFLECTION || defined FORWARD_BACKGROUND_REFLECTION) || (DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0)
+	#if defined DEFERRED_BACKGROUND_REFLECTION || defined FORWARD_BACKGROUND_REFLECTION || DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0 || defined ECLIPSE_RTGI_REFLECTIONS
 		if(reflectionVisibilty < 1.0){
 			#if defined DEFERRED_BACKGROUND_REFLECTION || defined FORWARD_BACKGROUND_REFLECTION
 				#if !defined OVERWORLD_SHADER
@@ -2408,9 +2421,15 @@ vec3 specularReflections(
 				#endif
 			#endif
 
+			#ifdef ECLIPSE_RTGI_REFLECTIONS
+				float screenReliability = 0.0;
+			#endif
 			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0
 				vec3 backgroundTint = vec3(1.0);
 				enviornmentReflection = getEnvironmentReflections(reflectedVector_L, flatNormal, normal, playerPos, viewPos, noise, isHand, roughness, backgroundReflectMask, backgroundTint
+				#ifdef ECLIPSE_RTGI_REFLECTIONS
+					, screenReliability
+				#endif
 				#ifdef FORWARD_SPECULAR
 				 ,isWater
 				#endif
@@ -2418,6 +2437,22 @@ vec3 specularReflections(
 				#if defined VOXEL_REFLECTIONS && (defined DEFERRED_BACKGROUND_REFLECTION || defined FORWARD_BACKGROUND_REFLECTION)
 					backgroundReflection *= backgroundTint;
 				#endif
+			#endif
+			#ifdef ECLIPSE_RTGI_REFLECTIONS
+				float missingScreen = 1.0 - enviornmentReflection.a * screenReliability;
+				float traceWeight = (1.0 - smoothstep(0.15, 0.42, roughness)) * missingScreen;
+				if (worldReflectionReceiver && traceWeight > 0.001) {
+					vec4 worldReflection = rtgiWorldReflection(playerPos, flatNormal, reflectedVector_L, roughness);
+					float worldWeight = worldReflection.a * traceWeight;
+					float screenWeight = enviornmentReflection.a * (1.0 - worldWeight);
+					float reflectedWeight = screenWeight + worldWeight;
+					enviornmentReflection = vec4(
+						(enviornmentReflection.rgb * screenWeight + worldReflection.rgb * worldWeight) / max(reflectedWeight, 1e-5),
+						reflectedWeight
+					);
+				}
+			#endif
+			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0 || defined ECLIPSE_RTGI_REFLECTIONS
 				// darkening for metals.
 				vec3 DarkenedDiffuseLighting = isMetal ? diffuseLighting * (1.0-enviornmentReflection.a) * (1.0-lightmap) : diffuseLighting;
 
@@ -2434,7 +2469,7 @@ vec3 specularReflections(
 				specularReflections = mix(DarkenedDiffuseLighting, backgroundReflection, backgroundReflectMask);
 			#endif
 
-			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0
+			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0 || defined ECLIPSE_RTGI_REFLECTIONS
 				specularReflections = mix(specularReflections, enviornmentReflection.rgb, enviornmentReflection.a);
 			#endif
 
@@ -2456,7 +2491,7 @@ vec3 specularReflections(
 	#if defined FORWARD_SPECULAR || defined DEFERRED_SPECULAR && !defined DENOISED_REFLECTIONS
 		#if defined OVERWORLD_SHADER && SUN_SPECULAR_MULT > 0
 			vec3 lightSourceReflection = backgroundReflectMask*SUN_SPECULAR_MULT * lightColor * GGX(normal, -NplayerPos, lightVec, roughness, reflectance, metalAlbedoTint);
-			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0
+			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0 || defined ECLIPSE_RTGI_REFLECTIONS
 				specularReflections += lightSourceReflection * (1.0 - enviornmentReflection.a);
 			#else
 				specularReflections += lightSourceReflection;

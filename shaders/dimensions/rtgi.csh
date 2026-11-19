@@ -120,13 +120,17 @@ uint rtgiHash(uint value) {
 	return value ^ (value >> 16u);
 }
 
-vec3 rtgiDirection(ivec2 tile, vec3 normal) {
+vec2 rtgiSamplePair(ivec2 tile, uint salt) {
 	// The pack's cloud noise is spatially smooth. Independent phases keep nearby
 	// rays from converging to the same direction across an entire wall.
-	uint seed = uint(tile.x) + uint(tile.y) * 65536u;
+	uint seed = (uint(tile.x) + uint(tile.y) * 65536u) ^ salt;
 	uvec2 bits = uvec2(rtgiHash(seed), rtgiHash(seed ^ 0x9e3779b9u));
 	vec2 phase = vec2(bits >> 8u) * (1.0 / 16777216.0);
-	vec2 samplePoint = fract(phase + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
+	return fract(phase + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
+}
+
+vec3 rtgiDirection(ivec2 tile, vec3 normal) {
+	vec2 samplePoint = rtgiSamplePair(tile, 0u);
 	float radius = sqrt(samplePoint.x);
 	float phi = 6.283185307 * samplePoint.y;
 	vec3 axis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
@@ -135,6 +139,33 @@ vec3 rtgiDirection(ivec2 tile, vec3 normal) {
 	return tangent * (radius * cos(phi)) + bitangent * (radius * sin(phi))
 		+ normal * sqrt(1.0 - samplePoint.x);
 }
+
+#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+	void rtgiStoreDirect(ivec2 tile, bool evenFrame, uvec4 direct) {
+		imageStore(rtgiDirect, rtgiHistoryPixel(tile, evenFrame, imageSize(rtgiDirect)), direct);
+	}
+
+	void rtgiSampleDirect(ivec2 tile, bool evenFrame, vec3 position, RtgiSurface surface,
+		bool useHistory, ivec2 historyTile, float screenMotion) {
+		vec2 samplePoint = rtgiSamplePair(tile, 0x6a09e667u);
+		float phi = 6.283185307 * samplePoint.y;
+		vec2 disk = sqrt(samplePoint.x) * vec2(cos(phi), sin(phi));
+		uint lightKey;
+		vec4 direct = rtgiLocalLighting(position, surface.flatNormal, surface.worldNormal, disk, lightKey);
+		direct.rgb *= direct.a;
+
+		uint count = 1u;
+		if (useHistory && direct.a > 0.0) {
+			uvec4 previous = imageLoad(rtgiDirect, rtgiHistoryPixel(historyTile, !evenFrame, imageSize(rtgiDirect)));
+			vec4 history = rtgiUnpackDirect(previous);
+			if (previous.z == lightKey && abs(history.a - direct.a) < 0.15) {
+				count += min(previous.w, uint(mix(15.0, 3.0, smoothstep(0.75, 5.0, screenMotion))));
+				direct = mix(history, direct, 1.0 / float(count));
+			}
+		}
+		rtgiStoreDirect(tile, evenFrame, uvec4(packHalf2x16(direct.xy), packHalf2x16(direct.zw), lightKey, count));
+	}
+#endif
 
 bool rtgiRayDepth(
 	vec4 clip, float viewDepth, vec2 halfViewport, vec2 rasterOffset, ivec2 renderSize,
@@ -207,13 +238,9 @@ bool rtgiTrace(
 }
 
 void rtgiStoreTile(ivec2 tile, bool evenFrame, vec4 surface, vec4 lighting) {
-	if (evenFrame) {
-		imageStore(rtgiSurface0, tile, surface);
-		imageStore(rtgiHistory0, tile, lighting);
-	} else {
-		imageStore(rtgiSurface1, tile, surface);
-		imageStore(rtgiHistory1, tile, lighting);
-	}
+	if (evenFrame) imageStore(rtgiSurface0, tile, surface);
+	else imageStore(rtgiSurface1, tile, surface);
+	imageStore(rtgiHistory, rtgiHistoryPixel(tile, evenFrame, imageSize(rtgiHistory)), lighting);
 }
 
 void main() {
@@ -229,8 +256,8 @@ void main() {
 	RtgiSurface surface;
 	if (isEyeInWater != 0 || !rtgiReadSurface(pixel, texelFetch(depthtex1, pixel, 0).r, 1.0 / viewport, jitter, surface)) {
 		rtgiStoreTile(tile, evenFrame, vec4(0.0), vec4(0.0));
-		#ifdef ECLIPSE_RTGI_WORLD
-			imageStore(rtgiFirstBounce, tile, vec4(0.0));
+		#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+			rtgiStoreDirect(tile, evenFrame, uvec4(0u));
 		#endif
 		return;
 	}
@@ -238,7 +265,7 @@ void main() {
 	bool historyAvailable = rtgiHistoryAvailable(renderSize);
 
 	RtgiSurface hit;
-	ivec2 historyTile;
+	ivec2 historyTile = ivec2(0);
 	float historyCount;
 	vec2 previousPixel;
 	float hitDistance;
@@ -248,9 +275,8 @@ void main() {
 	#ifdef ECLIPSE_RTGI_WORLD
 		vec3 position = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
 		bool modeledReceiver = rtgiVoxelReceiver(position, surface.flatNormal);
-		vec3 firstBounce = vec3(0.0);
 		if (modeledReceiver) {
-			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, sampleLighting, firstBounce) == rtgiRayUnknown;
+			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, sampleLighting) == rtgiRayUnknown;
 		}
 	#endif
 	if (needsScreen) {
@@ -266,24 +292,26 @@ void main() {
 		#ifdef ECLIPSE_RTGI_WORLD
 			if (!hasScreenLight && !modeledReceiver) {
 				vec4 fallback;
-				rtgiWorldBounce(position, surface.flatNormal, direction, fallback, firstBounce);
+				rtgiWorldBounce(position, surface.flatNormal, direction, fallback);
 				sampleLighting.rgb = fallback.rgb;
 				sampleLighting.a = max(sampleLighting.a, fallback.a);
 			}
 		#endif
 	}
-	#ifdef ECLIPSE_RTGI_WORLD
-		imageStore(rtgiFirstBounce, tile, vec4(firstBounce, float(modeledReceiver && !needsScreen)));
-	#endif
 
 	vec4 previousLighting = vec4(0.0);
 	float sampleCount = 1.0;
-	if (historyAvailable && rtgiReproject(surface, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
-		previousLighting = evenFrame ? imageLoad(rtgiHistory1, historyTile) : imageLoad(rtgiHistory0, historyTile);
+	bool useHistory = historyAvailable && rtgiReproject(surface, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel);
+	float screenMotion = 0.0;
+	if (useHistory) {
+		previousLighting = imageLoad(rtgiHistory, rtgiHistoryPixel(historyTile, !evenFrame, imageSize(rtgiHistory)));
 		vec2 currentPixel = vec2(pixel) + 0.5 - jitter;
-		float screenMotion = length(currentPixel - previousPixel);
+		screenMotion = length(currentPixel - previousPixel);
 		sampleCount += min(historyCount, mix(31.0, 5.0, smoothstep(1.0, 10.0, screenMotion)));
 	}
+	#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+		rtgiSampleDirect(tile, evenFrame, position, surface, useHistory, historyTile, screenMotion);
+	#endif
 
 	vec4 geometry = vec4(rtgiEncodeNormal(surface.worldNormal), sampleCount, -surface.viewPosition.z);
 	// Keep contact occlusion responsive when nearby geometry changes.

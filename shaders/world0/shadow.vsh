@@ -93,6 +93,10 @@ vec3 viewToWorld(vec3 viewPos) {
 	uniform int renderStage;
 
 	#include "/lib/voxel_common.glsl"
+	#ifdef ECLIPSE_RTGI_WORLD
+		#define ECLIPSE_RTGI_MATERIAL_CAPTURE
+		#include "/lib/rtgi_voxel_material.glsl"
+	#endif
 	#include "/lib/voxel_write.glsl"
 #endif
 

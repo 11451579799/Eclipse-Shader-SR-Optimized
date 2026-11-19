@@ -6,15 +6,15 @@ struct RtgiFaceEntry {
 	uvec4 data;
 };
 
-// A compute pass reads the previous writes. Opaque shading publishes new entries
-// afterwards, with one atomic claim per slot and frame.
+// Trace and shading read the previous bank while opaque shading writes the
+// current bank. This lets glossy rays shade hits without racing face updates.
 #ifdef ECLIPSE_RTGI_TRACE
 	layout(std430, binding = 7) readonly buffer RtgiFaceHistory {
-		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize];
+		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize * 2u];
 	};
 #else
 	layout(std430, binding = 7) coherent buffer RtgiFaceHistory {
-		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize];
+		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize * 2u];
 	};
 #endif
 
@@ -39,7 +39,8 @@ vec3 rtgiUnpackFaceBounce(uvec4 data) {
 }
 
 bool rtgiLoadFace(ivec4 key, out vec3 albedo, out vec3 bounce) {
-	RtgiFaceEntry entry = rtgiFaces[rtgiFaceSlot(key)];
+	uint previousBank = (uint(frameCounter) & 1u) ^ 1u;
+	RtgiFaceEntry entry = rtgiFaces[rtgiFaceSlot(key) + previousBank * rtgiFaceCacheSize];
 	uint age = uint(frameCounter) + 1u - entry.data.x;
 	if (entry.data.x == 0u || age > rtgiFaceCacheLifetime || any(notEqual(entry.key, key))) return false;
 	albedo = vec3(unpackHalf2x16(entry.data.y), unpackHalf2x16(entry.data.z).x);
@@ -55,7 +56,7 @@ void rtgiStoreFace(vec3 playerPosition, vec3 flatNormal, vec3 albedo, vec3 bounc
 	if (!rtgiFullVoxel(blockId)) return;
 
 	ivec4 key = rtgiFaceKey(voxel, flatNormal, blockId);
-	uint slot = rtgiFaceSlot(key);
+	uint slot = rtgiFaceSlot(key) + (uint(frameCounter) & 1u) * rtgiFaceCacheSize;
 	uint stamp = uint(frameCounter) + 1u;
 	uint oldStamp = atomicExchange(rtgiFaces[slot].data.x, stamp);
 	if (oldStamp == stamp) return;
@@ -64,10 +65,12 @@ void rtgiStoreFace(vec3 playerPosition, vec3 flatNormal, vec3 albedo, vec3 bounc
 		uvec4 oldData = rtgiFaces[slot].data;
 		vec3 oldAlbedo = vec3(unpackHalf2x16(oldData.y), unpackHalf2x16(oldData.z).x);
 		if (distance(oldAlbedo, albedo) < 0.3) {
-			// Blend only the one-bounce estimate. The second bounce never feeds back.
-			bounce = mix(rtgiUnpackFaceBounce(oldData), bounce, 0.20);
+			bounce = mix(rtgiUnpackFaceBounce(oldData), bounce, 0.32);
 		}
 	}
+	// Store incident indirect light only. The hit shader applies the surface
+	// albedo and a bounded throughput on each cache reuse.
+	bounce = clamp(bounce, 0.0, 4.0);
 
 	rtgiFaces[slot].key = key;
 	rtgiFaces[slot].data.y = packHalf2x16(albedo.rg);
