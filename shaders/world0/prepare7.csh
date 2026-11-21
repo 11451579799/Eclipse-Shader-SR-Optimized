@@ -49,10 +49,10 @@ void rtgiUpdateFace(ivec3 voxel, uint blockId, vec3 normal) {
 	vec3 previousDirect;
 	vec3 previousIndirect;
 	float freshness;
-	if (rtgiLoadFace(key, material, previousDirect, previousIndirect, freshness)) {
+	if (rtgiLoadFace(key, material, previousDirect, previousIndirect, freshness))
 		direct = mix(previousDirect, direct, 0.50);
+	if (freshness > 0.0)
 		indirect = mix(previousIndirect, indirect, 0.20);
-	}
 
 	rtgiFaces[pendingSlot].key = key;
 	rtgiFaces[pendingSlot].data.y = rtgiPackIrradiance(direct);

@@ -137,10 +137,11 @@
 		return rtgiSkyRadiance() * visibility;
 	}
 
-	bool rtgiVoxelReceiver(vec3 position, vec3 flatNormal) {
-		ivec3 voxel = ivec3(floor(position - flatNormal * rtgiRayBias));
+	bool rtgiVoxelReceiver(vec3 position, vec3 flatNormal, out ivec3 voxel, out uint id) {
+		voxel = ivec3(floor(position - flatNormal * rtgiRayBias));
+		id = 0u;
 		if (!rtgiVoxelContains(voxel)) return false;
-		uint id = imageLoad(imgVoxelMask, voxel).r;
+		id = imageLoad(imgVoxelMask, voxel).r;
 		return rtgiFullVoxel(id) || (id >= BLOCK_DOOR_N && id <= BLOCK_DOOR_W)
 			|| id == BLOCK_SLAB_TOP || id == BLOCK_SLAB_BOTTOM
 			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W);
@@ -180,10 +181,14 @@
 	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting) {
 		lighting = vec4(0.0);
 		if (dot(flatNormal, direction) <= 0.0) return rtgiRayMiss;
+		const float nearRange = 12.0;
+		// Spend the extra range on sheltered surfaces, where a distant wall
+		// can provide most of the incident light through a narrow opening.
+		float maxDistance = mix(16.0, nearRange, smoothstep(0.25, 0.75, skylight));
 		vec3 origin = position + flatNormal * rtgiRayBias;
 		RtgiVoxelHit hit;
 		vec3 transmission;
-		int result = rtgiTraceVoxels(origin, direction, 12.0, ivec3(-1), hit, transmission);
+		int result = rtgiTraceVoxels(origin, direction, maxDistance, ivec3(-1), hit, transmission);
 		if (result != rtgiRayHit) {
 			if (result == rtgiRayMiss)
 				lighting.rgb = transmission * rtgiEscapedSkylight(direction, skylight);
@@ -192,6 +197,8 @@
 
 		lighting.a = 1.0 - smoothstep(0.10, 2.0, hit.distance);
 		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance, true);
+		if (hit.distance > nearRange)
+			lighting.rgb *= 1.0 - smoothstep(max(nearRange, maxDistance - 2.0), maxDistance, hit.distance);
 		return rtgiRayHit;
 	}
 

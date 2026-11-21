@@ -311,7 +311,9 @@ void main() {
 	bool samplesWorldSky = false;
 	#ifdef ECLIPSE_RTGI_WORLD
 		vec3 position = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
-		samplesWorldSky = rtgiVoxelReceiver(position, surface.flatNormal);
+		ivec3 receiverVoxel;
+		uint receiverId;
+		samplesWorldSky = rtgiVoxelReceiver(position, surface.flatNormal, receiverVoxel, receiverId);
 		historyNormal = surface.flatNormal;
 	#endif
 
@@ -385,6 +387,23 @@ void main() {
 			}
 		#endif
 	}
+
+	#ifdef ECLIPSE_RTGI_WORLD
+		if (historyAvailable && samplesWorldSky && sampleCount < 5.0 && surface.skylight < 0.75) {
+			uint material = rtgiVoxelMaterialAt(receiverVoxel, surface.flatNormal);
+			if (material != 0u) {
+				vec3 unusedDirect, cachedBounce;
+				float freshness;
+				rtgiLoadFace(rtgiFaceKey(receiverVoxel, surface.flatNormal, receiverId),
+					material, unusedDirect, cachedBounce, freshness);
+				// Start newly exposed surfaces with some world-space irradiance.
+				// Both terms estimate the same incoming light.
+				float cacheWeight = 0.5 * freshness * (1.0 - smoothstep(1.0, 5.0, sampleCount))
+					* (1.0 - smoothstep(0.25, 0.75, surface.skylight));
+				sampleLighting.rgb = mix(sampleLighting.rgb, cachedBounce, cacheWeight);
+			}
+		}
+	#endif
 
 	// Store traced sky coverage in the sign of the temporal sample count.
 	vec4 geometry = vec4(rtgiEncodeNormal(historyNormal), samplesWorldSky ? -sampleCount : sampleCount, -surface.viewPosition.z);
