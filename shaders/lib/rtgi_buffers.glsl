@@ -1,28 +1,8 @@
-#ifdef RTGI
-	#if defined IRIS_FEATURE_CUSTOM_IMAGES && !defined VIVECRAFT
-		#define ECLIPSE_RTGI_ACTIVE
-	#endif
-#endif
+#include "/lib/rtgi_frame.glsl"
 
 #ifdef ECLIPSE_RTGI_ACTIVE
 
-#if defined TAA && !defined ECLIPSE_SR_UPSCALE
-	uniform int framemod8;
-	#include "/lib/TAA_jitter.glsl"
-#endif
-
 const float rtgiViewRange = 48.0;
-const int rtgiStride = 3;
-const int rtgiTileCenter = rtgiStride / 2;
-
-layout(std430, binding = 6) buffer RtgiFrameHistory {
-	ivec2 rtgiPreviousRenderSize;
-	vec2 rtgiPreviousJitter;
-	int rtgiPreviousFrame;
-	float rtgiPreviousTime;
-	float rtgiPreviousSun;
-	float rtgiPreviousRain;
-};
 
 // Iris limits the pack to 16 custom images. Store each history's two
 // frame banks in the top and bottom halves of a single image.
@@ -36,7 +16,7 @@ ivec2 rtgiHistoryPixel(ivec2 tile, bool evenFrame, ivec2 extent) {
 	}
 	#ifdef ECLIPSE_RTGI_TRACE
 		layout(rgba32ui) uniform uimage2D rtgiDirect;
-	#elif !defined ECLIPSE_RTGI_FILTER
+	#elif defined ECLIPSE_RTGI_FILTER
 		uniform usampler2D texRtgiDirect;
 	#endif
 #endif
@@ -50,53 +30,39 @@ ivec2 rtgiHistoryPixel(ivec2 tile, bool evenFrame, ivec2 extent) {
 	layout(rgba16f) uniform readonly image2D rtgiHistory;
 	layout(rgba16f) uniform readonly image2D rtgiSurface0;
 	layout(rgba16f) uniform readonly image2D rtgiSurface1;
+	layout(rgba16f) uniform writeonly image2D rtgiDenoised;
 	#ifdef ECLIPSE_RTGI_WIDE_FILTER
-		layout(rgba16f) uniform image2D rtgiDenoised;
+		layout(rgba16f) uniform readonly image2D rtgiLight;
 	#else
-		layout(rgba16f) uniform writeonly image2D rtgiDenoised;
+		layout(rgba16f) uniform writeonly image2D rtgiLight;
 	#endif
 #else
 	layout(rgba16f) uniform writeonly image2D rtgiLight;
-	layout(rgba16f) uniform readonly image2D rtgiSurface0;
-	layout(rgba16f) uniform readonly image2D rtgiSurface1;
-	layout(rgba16f) uniform readonly image2D rtgiDenoised;
+	uniform sampler2D texRtgiSurface0;
+	uniform sampler2D texRtgiSurface1;
+	uniform sampler2D texRtgiDenoised;
 #endif
 
-#if defined ECLIPSE_RTGI_WIDE_FILTER || (!defined ECLIPSE_RTGI_TRACE && !defined ECLIPSE_RTGI_FILTER)
-ivec2 rtgiFilteredPixel(ivec2 tile) {
-	return tile + ivec2(0, imageSize(rtgiDenoised).y / 2);
-}
-#endif
-
-vec2 rtgiViewportSize() {
-	#ifdef ECLIPSE_SR_UPSCALE
-		return SRScaledViewportSize;
-	#else
-		return vec2(viewWidth, viewHeight) * RENDER_SCALE;
-	#endif
-}
-
-ivec2 rtgiRenderSize() {
-	// The scaled fullscreen primitive covers pixel centers strictly inside its edge.
-	return ivec2(ceil(rtgiViewportSize() - 0.5));
+int rtgiSampleStride() {
+	// Keep the number of diffuse and local shadow rays near 250k samples
+	// at common native resolutions. Internal DLSS resolutions use 3×3.
+	vec2 size = rtgiViewportSize();
+	return max(3, int(ceil(sqrt(size.x * size.y / 280000.0))));
 }
 
 ivec2 rtgiTileSize(ivec2 renderSize) {
-	return min((renderSize + rtgiStride - 1) / rtgiStride, imageSize(rtgiSurface0));
+	int stride = rtgiSampleStride();
+	#if defined ECLIPSE_RTGI_TRACE || defined ECLIPSE_RTGI_FILTER
+		ivec2 capacity = imageSize(rtgiSurface0);
+	#else
+		ivec2 capacity = textureSize(texRtgiSurface0, 0);
+	#endif
+	return min((renderSize + stride - 1) / stride, capacity);
 }
 
 ivec2 rtgiTilePixel(ivec2 tile, ivec2 renderSize) {
-	return min(tile * rtgiStride + rtgiTileCenter, renderSize - 1);
-}
-
-vec2 rtgiJitterPixels() {
-	#ifdef ECLIPSE_SR_UPSCALE
-		return SRJitterOffset;
-	#elif defined TAA
-		return viewportJitter(framemod8) * 0.5;
-	#else
-		return vec2(0.0);
-	#endif
+	int stride = rtgiSampleStride();
+	return min(tile * stride + stride / 2, renderSize - 1);
 }
 
 bool rtgiContains(ivec2 pixel, ivec2 size) {

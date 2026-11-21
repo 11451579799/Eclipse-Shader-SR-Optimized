@@ -4,7 +4,6 @@ in vec2 texcoord;
 
 uniform vec2 texelSize;
 
-uniform sampler2D colortex7;
 uniform sampler2D colortex14;
 uniform sampler2D depthtex0;
 uniform sampler2D noisetex;
@@ -13,13 +12,11 @@ uniform float viewHeight;
 uniform float viewWidth;
 uniform float aspectRatio;
 
-uniform float frameTimeCounter;
 uniform int frameCounter;
 
 uniform int hideGUI;
 
 #include "/lib/color_transforms.glsl"
-#include "/lib/color_dither.glsl"
 #include "/lib/res_params.glsl"
 
 /*
@@ -107,10 +104,10 @@ vec3 colorGrading(vec3 color) {
 vec3 contrastAdaptiveSharpening(vec3 color, vec2 texcoord){
   float sharpen_strength = float(SHARPENING)/100.0;
   //Weights : 1 in the center, 0.5 middle, 0.25 corners
-  vec3 albedoCurrent1 = texture(colortex7, texcoord + vec2(texelSize.x,texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
-  vec3 albedoCurrent2 = texture(colortex7, texcoord + vec2(texelSize.x,-texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
-  vec3 albedoCurrent3 = texture(colortex7, texcoord + vec2(-texelSize.x,-texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
-  vec3 albedoCurrent4 = texture(colortex7, texcoord + vec2(-texelSize.x,texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
+  vec3 albedoCurrent1 = texture(colortex14, texcoord + vec2(texelSize.x,texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
+  vec3 albedoCurrent2 = texture(colortex14, texcoord + vec2(texelSize.x,-texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
+  vec3 albedoCurrent3 = texture(colortex14, texcoord + vec2(-texelSize.x,-texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
+  vec3 albedoCurrent4 = texture(colortex14, texcoord + vec2(-texelSize.x,texelSize.y)/MC_RENDER_QUALITY*0.5).rgb;
  
   vec3 m1 = -0.5/3.5*color + albedoCurrent1/3.5 + albedoCurrent2/3.5 + albedoCurrent3/3.5 + albedoCurrent4/3.5;
   
@@ -155,9 +152,9 @@ vec3 chromaticAberration(vec2 UV){
   float aberrationStrength = CHROMATIC_ABERRATION_STRENGTH * vignette;
 
   vec3 color = vec3(0.0);
-  color.r = texture(colortex7, (centeredUV - (centeredUV + centeredUV*noise) * aberrationStrength) + 0.5).r;
-  color.g = texture(colortex7, texcoord).g;
-  color.b = texture(colortex7, (centeredUV + (centeredUV + centeredUV*noise) * aberrationStrength) + 0.5).b;
+  color.r = texture(colortex14, (centeredUV - (centeredUV + centeredUV*noise) * aberrationStrength) + 0.5).r;
+  color.g = texture(colortex14, texcoord).g;
+  color.b = texture(colortex14, (centeredUV + (centeredUV + centeredUV*noise) * aberrationStrength) + 0.5).b;
 
   return color;
 }
@@ -169,7 +166,7 @@ void main() {
   #ifdef CHROMATIC_ABERRATION
 	  vec3 color = chromaticAberration(texcoord);
   #else
-	  vec3 color = texture(colortex7,texcoord).rgb;
+	  vec3 color = texture(colortex14,texcoord).rgb;
   #endif
 
 	#if SHARPENING > 0
@@ -186,5 +183,8 @@ void main() {
 	  color = colorGrading(color);
   #endif
   
-	gl_FragData[0] = vec4(clamp(int8Dither(color, texcoord),0.0,1.0), 0.0);
+	// Dither once at final 8-bit quantization with a stable half-LSB blue-noise threshold.
+	ivec2 noisePixel = ivec2(gl_FragCoord.xy) % textureSize(noisetex, 0);
+	float threshold = (texelFetch(noisetex, noisePixel, 0).a * 255.0 + 0.5) / 256.0;
+	gl_FragData[0] = vec4(clamp(color + (threshold - 0.5) / 255.0, 0.0, 1.0), 0.0);
 }

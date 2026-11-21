@@ -26,7 +26,28 @@
 		#include "/lib/rtgi_local_lights.glsl"
 	#endif
 
-	vec3 rtgiShadowBounce(vec3 facePosition, vec3 faceNormal, ivec3 voxel, vec3 voxelOffset) {
+	vec3 rtgiSunDirection() {
+		#ifdef CUSTOM_MOON_ROTATION
+			return vec3(customShadowMatrixSSBO[0].z, customShadowMatrixSSBO[1].z, customShadowMatrixSSBO[2].z);
+		#else
+			return vec3(shadowModelView[0].z, shadowModelView[1].z, shadowModelView[2].z);
+		#endif
+	}
+
+	vec3 rtgiSunVisibility(ivec2 shadowPixel, float reference) {
+		float opaqueDepth = texelFetch(shadowtex1, shadowPixel, 0).r;
+		if (opaqueDepth <= 0.0 || reference > opaqueDepth) return vec3(0.0);
+		#ifdef TRANSLUCENT_COLORED_SHADOWS
+			float visibleDepth = texelFetch(shadowtex0, shadowPixel, 0).r;
+			if (reference > visibleDepth && visibleDepth < opaqueDepth - 1e-6) {
+				vec4 tint = texelFetch(shadowcolor0, shadowPixel, 0);
+				return toLinear(tint.rgb) * (1.0 - tint.a);
+			}
+		#endif
+		return vec3(1.0);
+	}
+
+	vec3 rtgiSunIrradiance(vec3 facePosition, vec3 faceNormal) {
 		#ifdef CUSTOM_MOON_ROTATION
 			mat4 shadowView = customShadowMatrixSSBO;
 		#else
@@ -34,56 +55,65 @@
 		#endif
 
 		// The positive shadow-view Z axis points toward the mapped light.
-		vec3 lightDirection = vec3(shadowView[0].z, shadowView[1].z, shadowView[2].z);
+		vec3 lightDirection = rtgiSunDirection();
 		float incidence = dot(faceNormal, lightDirection);
 		if (incidence <= 0.06) return vec3(0.0);
 
+		vec3 lightColor = max(lightSourceColorSSBO / 2400.0, vec3(0.0));
+		if (max(lightColor.r, max(lightColor.g, lightColor.b)) < 1e-5) return vec3(0.0);
 		vec3 projectionScale = vec3(shadowProjection[0].x, shadowProjection[1].y, shadowProjection[2].z);
 		vec3 shadowClip = (shadowView * vec4(facePosition, 1.0)).xyz * projectionScale + shadowProjection[3].xyz;
 		vec2 shadowXY = shadowClip.xy;
+		float distortion = 1.0;
 		#ifdef DISTORT_SHADOWMAP
-			shadowXY *= calcDistort(shadowXY);
+			distortion = calcDistort(shadowXY);
+			shadowXY *= distortion;
 		#endif
 		vec2 shadowUV = shadowXY * 0.5 + 0.5;
 		if (any(lessThan(shadowUV, vec2(0.0))) || any(greaterThanEqual(shadowUV, vec2(1.0)))) return vec3(0.0);
 
-		ivec2 shadowSize = textureSize(shadowtex0, 0);
-		ivec2 shadowPixel = ivec2(shadowUV * vec2(shadowSize));
-		float visibleDepth = texelFetch(shadowtex0, shadowPixel, 0).r;
-		float opaqueDepth = texelFetch(shadowtex1, shadowPixel, 0).r;
-		if (visibleDepth <= 0.0 || visibleDepth >= 1.0 || abs(visibleDepth - opaqueDepth) > 1e-6) return vec3(0.0);
-
-		// Invert the radial distortion at the actual texel center before checking its surface.
-		vec2 sampledXY = (vec2(shadowPixel) + 0.5) / vec2(shadowSize) * 2.0 - 1.0;
-		#ifdef DISTORT_SHADOWMAP
-			float sampledRadius = length(sampledXY);
-			float clipRadius = length(shadowClip.xy);
-			for (int iteration = 0; iteration < 3; ++iteration) {
-				float argument = clipRadius * b + a;
-				float error = clipRadius - sampledRadius * k * log(argument);
-				float slope = 1.0 - sampledRadius * k * b / argument;
-				clipRadius = max(clipRadius - error / max(slope, 0.1), 0.0);
-			}
-			sampledXY *= clipRadius / max(sampledRadius, 1e-7);
-		#endif
-		// The shadow vertex shader divides clip Z by six before the viewport transform.
-		vec3 sampledClip = vec3(sampledXY, (visibleDepth * 2.0 - 1.0) * 6.0);
-		vec3 sampledView = (sampledClip - shadowProjection[3].xyz) / projectionScale;
-		vec3 sampledPosition = transpose(mat3(shadowView)) * (sampledView - shadowView[3].xyz);
-		vec3 localPosition = sampledPosition + voxelOffset - vec3(voxel);
-		if (any(lessThan(localPosition, vec3(-0.035))) || any(greaterThan(localPosition, vec3(1.035)))) return vec3(0.0);
-		if (abs(dot(sampledPosition - facePosition, faceNormal)) > 0.035
-			|| distance(sampledPosition, facePosition) > 0.30) return vec3(0.0);
-
-		vec4 surface = texelFetch(shadowcolor0, shadowPixel, 0);
-		if (surface.a < 0.99) return vec3(0.0);
-
-		vec3 lightColor = max(lightSourceColorSSBO / 2400.0, vec3(0.0));
+		ivec2 shadowSize = textureSize(shadowtex1, 0);
+		float reference = shadowClip.z / 12.0 + 0.5;
+		if (reference <= 0.0 || reference >= 1.0) return vec3(0.0);
+		// Compare the ray hit to the shadow depth. The surface color comes from
+		// the hit voxel, since the nearest shadow texel may belong to a different face.
+		float texelWidth = 2.0 / (abs(projectionScale.x) * float(shadowSize.x) * max(distortion, 0.25));
+		float worldBias = clamp(0.018 + texelWidth * 0.45 / incidence, 0.018, 0.12);
+		float bias = worldBias * abs(projectionScale.z) / 12.0;
+		vec2 shadowRaster = shadowUV * vec2(shadowSize) - 0.5;
+		vec2 blend = fract(shadowRaster);
+		ivec2 first = clamp(ivec2(floor(shadowRaster)), ivec2(0), shadowSize - 1);
+		ivec2 last = clamp(ivec2(floor(shadowRaster)) + 1, ivec2(0), shadowSize - 1);
+		float unbiasedReference = reference - bias;
+		// Compare each depth before interpolation; interpolated depths leak across blockers.
+		vec3 visibility = mix(
+			mix(rtgiSunVisibility(first, unbiasedReference), rtgiSunVisibility(ivec2(last.x, first.y), unbiasedReference), blend.x),
+			mix(rtgiSunVisibility(ivec2(first.x, last.y), unbiasedReference), rtgiSunVisibility(last, unbiasedReference), blend.x),
+			blend.y);
 		#ifdef USE_CUSTOM_DIFFUSE_LIGHTING_COLORS
 			lightColor = luma(lightColor) * vec3(DIRECTLIGHT_DIFFUSE_R, DIRECTLIGHT_DIFFUSE_G, DIRECTLIGHT_DIFFUSE_B);
 		#endif
-		// The shadow map covers terrain. Fade the unresolved contribution in rain.
-		return toLinear(surface.rgb) * lightColor * ((incidence * 255.0 - 15.0) / 240.0) * (1.0 - rainStrength);
+		return visibility * lightColor * ((incidence * 255.0 - 15.0) / 240.0) * (1.0 - rainStrength);
+	}
+
+	vec3 rtgiSkyRadiance() {
+		vec3 sky = max(averageSkyCol_CloudsSSBO / 900.0, vec3(0.0));
+		#ifdef USE_CUSTOM_DIFFUSE_LIGHTING_COLORS
+			sky = luma(sky) * vec3(INDIRECTLIGHT_DIFFUSE_R, INDIRECTLIGHT_DIFFUSE_G, INDIRECTLIGHT_DIFFUSE_B);
+		#endif
+		return sky * ambient_brightness;
+	}
+
+	float rtgiVoxelSkylight(uint material) {
+		return max(0.0, (float(material >> 24u) - 1.0) / 254.0);
+	}
+
+	vec3 rtgiEscapedSkylight(vec3 direction, float skylight) {
+		if (direction.y <= 0.0 || skylight <= 0.35) return vec3(0.0);
+		// The ray only covers the nearby voxel volume. Use terrain skylight
+		// as a guard against treating long tunnels as open sky.
+		float visibility = smoothstep(0.35, 0.85, skylight) * smoothstep(0.0, 0.20, direction.y);
+		return rtgiSkyRadiance() * visibility;
 	}
 
 	bool rtgiVoxelReceiver(vec3 position, vec3 flatNormal) {
@@ -95,61 +125,112 @@
 			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W);
 	}
 
-	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface) {
-		vec3 albedo;
-		vec3 bounce;
-		if (!rtgiLoadFace(rtgiFaceKey(hit.voxel, hit.normal, hit.blockId), albedo, bounce)) {
-			albedo = rtgiVoxelAlbedoAt(hit.voxel, hit.normal);
-			bounce = vec3(0.0);
-		}
-
-		vec3 directLight = vec3(0.0);
+	vec3 rtgiDirectIrradiance(vec3 surface, vec3 normal) {
+		vec3 light = vec3(0.0);
 		#if defined CUSTOM_MOON_ROTATION && LIGHTNING_SHADOWS > 0
 			if (lightningBoltPosition.w <= 0.0)
 		#endif
-		directLight = rtgiShadowBounce(surface - rtgiVoxelOffset(), hit.normal, hit.voxel, rtgiVoxelOffset());
-		#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
-			vec4 local = rtgiLocalLighting(surface, hit.normal, hit.normal);
-			directLight += albedo * local.rgb * local.a;
+		light += rtgiSunIrradiance(surface - rtgiVoxelOffset(), normal);
+		#if defined ECLIPSE_RTGI_BLOCK_SHADOWS && defined ECLIPSE_RTGI_TRACE
+			vec4 local = rtgiLocalLighting(surface, normal, normal, false);
+			// RGB already passed per-light visibility. There is no LPV
+			// contribution to replace it at this secondary surface.
+			light += local.rgb * rtgiLocalLightCoverage(surface + normal * rtgiRayBias);
 		#endif
-		return directLight + albedo * bounce * 0.60;
+		return light;
 	}
 
-	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, out vec4 lighting) {
+	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface, bool useCachedDirect) {
+		uint material = rtgiVoxelMaterialAt(hit.voxel, hit.normal);
+		vec3 albedo = material != 0u ? toLinear(unpackUnorm4x8(material).rgb) : vec3(0.45);
+		vec3 directLight;
+		vec3 bounce;
+		float freshness;
+		bool hasDirect = rtgiLoadFace(rtgiFaceKey(hit.voxel, hit.normal, hit.blockId), material, directLight, bounce, freshness);
+		if (!useCachedDirect || !hasDirect) directLight = rtgiDirectIrradiance(surface, hit.normal);
+		if (freshness < 1.0) {
+			float skylight = rtgiVoxelSkylight(material);
+			float openness = (pow(skylight, 15.0) * 2.0 + skylight * skylight) / 3.0;
+			directLight += rtgiSkyRadiance() * ((1.0 - freshness) * openness * (0.5 + 0.5 * hit.normal.y));
+		}
+		return albedo * (directLight + bounce * 0.90);
+	}
+
+	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting) {
 		lighting = vec4(0.0);
 		if (dot(flatNormal, direction) <= 0.0) return rtgiRayMiss;
 		vec3 origin = position + flatNormal * rtgiRayBias;
 		RtgiVoxelHit hit;
 		vec3 transmission;
 		int result = rtgiTraceVoxels(origin, direction, 12.0, ivec3(-1), hit, transmission);
-		if (result != rtgiRayHit) return result;
+		if (result != rtgiRayHit) {
+			if (result == rtgiRayMiss)
+				lighting.rgb = transmission * rtgiEscapedSkylight(direction, skylight);
+			return result;
+		}
 
 		lighting.a = 1.0 - smoothstep(0.10, 2.0, hit.distance);
-		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance);
+		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance, true);
 		return rtgiRayHit;
 	}
 
 	#if defined RTGI_REFLECTIONS && !defined ECLIPSE_RTGI_TRACE
-		vec4 rtgiWorldReflection(vec3 playerPosition, vec3 flatNormal, vec3 direction, float roughness) {
-			if (dot(flatNormal, direction) <= 0.0) return vec4(0.0);
+		float rtgiTraceReflection(vec3 playerPosition, vec3 flatNormal, vec3 direction, float roughness,
+			out RtgiVoxelHit hit, out vec3 hitPosition, out vec3 transmission) {
+			if (dot(flatNormal, direction) <= 0.0) return 0.0;
 			float coverage = 1.0 - smoothstep(36.0, 44.0, length(playerPosition));
-			if (coverage <= 0.0) return vec4(0.0);
+			if (coverage <= 0.0) return 0.0;
 
 			vec3 origin = playerPosition + rtgiVoxelOffset() + flatNormal * rtgiRayBias;
 			float maxDistance = mix(16.0, 8.0, smoothstep(0.02, 0.42, roughness));
-			RtgiVoxelHit hit;
-			vec3 transmission;
 			if (rtgiTraceVoxels(origin, direction, maxDistance, ivec3(-1), true, hit, transmission) != rtgiRayHit)
-				return vec4(0.0);
+				return 0.0;
+			hitPosition = origin + hit.distance * direction;
+			return coverage * (1.0 - smoothstep(maxDistance * 0.75, maxDistance, hit.distance));
+		}
 
-			uint id = hit.blockId;
-			vec3 lighting;
-			if (rtgiSolidEmitter(id) || rtgiTorch(id) || rtgiLantern(id)) {
-				lighting = 3.25 * rtgiEmitterIntensity(texelFetch(texBlockData, int(id), 0).r);
-			} else {
-				lighting = rtgiShadeVoxelHit(hit, origin + hit.distance * direction);
+		vec3 rtgiShadeReflection(RtgiVoxelHit hit, vec3 hitPosition, vec3 viewDirection, float receiverRoughness) {
+			if (rtgiSolidEmitter(hit.blockId) || rtgiTorch(hit.blockId) || rtgiLantern(hit.blockId))
+				return 3.25 * rtgiEmitterIntensity(texelFetch(texBlockData, int(hit.blockId), 0).r);
+
+			vec2 pbr = rtgiVoxelSpecularAt(hit.voxel);
+			vec3 lighting = rtgiShadeVoxelHit(hit, hitPosition, true);
+			if (pbr.x <= 0.0) return lighting;
+
+			bool conductor = pbr.y >= 229.5 / 255.0;
+			uint material = rtgiVoxelMaterialAt(hit.voxel, hit.normal);
+			if (material == 0u) return lighting;
+			vec3 albedo = toLinear(unpackUnorm4x8(material).rgb);
+			const vec3 conductorF0[8] = vec3[8](vec3(0.531, 0.512, 0.496), vec3(0.944, 0.776, 0.373),
+				vec3(0.912, 0.914, 0.920), vec3(0.556, 0.555, 0.555), vec3(0.926, 0.721, 0.504),
+				vec3(0.632, 0.626, 0.641), vec3(0.679, 0.642, 0.588), vec3(0.962, 0.949, 0.922));
+			vec3 f0 = vec3(max(pbr.y, 0.02));
+			if (conductor) {
+				f0 = pbr.y >= 254.5 / 255.0 ? albedo : conductorF0[int(clamp(pbr.y * 255.0 - 229.5, 0.0, 7.0))];
+				// The cache has no directional information. Keep a broad estimate
+				// of the reflected scene on rough conductors.
+				lighting *= mix(vec3(0.55), f0, 0.65);
 			}
-			return vec4(lighting * transmission, coverage * (1.0 - smoothstep(maxDistance * 0.75, maxDistance, hit.distance)));
+
+			vec3 lightDirection = rtgiSunDirection();
+			float noL = dot(hit.normal, lightDirection);
+			if (noL <= 0.06) return lighting;
+			vec3 halfway = normalize(viewDirection + lightDirection);
+			float noH = clamp(dot(hit.normal, halfway), 0.0, 1.0);
+			// The primary reflection footprint and the sun's area set a minimum
+			// lobe size. A point-sized secondary highlight would alias between rays.
+			float roughness = 1.0 - pbr.x;
+			float alpha = clamp(roughness * roughness + receiverRoughness * 0.5, 0.10, 1.0);
+			float a2 = alpha * alpha;
+			float denominator = noH * noH * (a2 - 1.0) + 1.0;
+			float distribution = a2 / max(denominator * denominator, 1e-5);
+			float noV = max(dot(hit.normal, viewDirection), 0.05);
+			float visibility = 0.5 / max(noL * mix(noV, 1.0, alpha) + noV * mix(noL, 1.0, alpha), 0.1);
+			float grazing = 1.0 - clamp(dot(viewDirection, halfway), 0.0, 1.0);
+			float grazing2 = grazing * grazing;
+			vec3 fresnel = mix(f0, vec3(1.0), grazing2 * grazing2 * grazing);
+			float lobe = clamp(distribution * visibility * 0.318309886, 0.0, 2.0);
+			return lighting + fresnel * lobe * rtgiSunIrradiance(hitPosition - rtgiVoxelOffset(), hit.normal);
 		}
 	#endif
 #endif

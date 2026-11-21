@@ -126,7 +126,11 @@ vec3 doBlockLightLighting(
     vec3 blockLight = lightmapCurve * lightColor;
     
     #if defined IS_LPV_ENABLED && defined MC_GL_ARB_shader_image_load_store && (!defined PHOTONICS_LIGHT_PASS || !defined PHOTONICS || !defined PH_ENABLE_BLOCKLIGHT || !defined PHOTONICS_ACTIVE) && !defined VOXY_PROGRAM
-        vec4 lpvSample = SampleLpvLinear(lpvPos);
+        #ifdef ECLIPSE_RTGI_SHADOW_LPV
+            vec4 lpvSample = tracedLightWeight >= 1.0 ? vec4(0.0) : SampleLpvLinear(lpvPos);
+        #else
+            vec4 lpvSample = SampleLpvLinear(lpvPos);
+        #endif
 
         #ifdef VANILLA_LIGHTMAP_MASK
             lpvSample.rgb *= lightmapCurve;

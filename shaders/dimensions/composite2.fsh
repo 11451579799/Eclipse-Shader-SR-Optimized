@@ -83,6 +83,9 @@ uniform float caveDetection;
 uniform float sunElevation;
 
 #include "/lib/res_params.glsl"
+#ifdef ECLIPSE_RTGI_OVERWORLD
+  #include "/lib/rtgi_frame.glsl"
+#endif
 
 #define diagonal3(m) vec3((m)[0].x, (m)[1].y, m[2].z)
 #define  projMAD(m, v) (diagonal3(m) * (v) + (m)[3].xyz)
@@ -240,6 +243,64 @@ vec3 decode (vec2 encn){
     n.xy = n.z <= 0.0 ? (1.0 - n.yx) * sign(encn) : encn;
     return clamp(normalize(n.xyz),-1.0,1.0);
 }
+
+#if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD && defined RTGI_REFLECTIONS
+vec3 rtgiFilterReflection(vec3 playerPosition, vec4 material, vec3 normal, float depth, vec3 currentReflection) {
+  ivec2 extent = rtgiRenderSize();
+  if (rtgiPreviousFrame + 1 != frameCounter || any(notEqual(rtgiPreviousRenderSize, extent))) return currentReflection;
+  vec3 relative = playerPosition + cameraPosition - previousCameraPosition;
+  vec4 view = gbufferPreviousModelView * vec4(relative, 1.0);
+  vec4 clip = gbufferPreviousProjection * view;
+  if (clip.w <= 0.0) return currentReflection;
+  vec2 viewport = rtgiViewportSize();
+  vec2 previous = (clip.xy / clip.w * 0.5 + 0.5) * viewport + rtgiPreviousJitter;
+  if (any(lessThan(previous, vec2(0.5))) || any(greaterThan(previous, vec2(extent) - 0.5))) return currentReflection;
+
+  ivec2 historyPixel = ivec2(previous);
+  vec4 history = texelFetch(colortex12, historyPixel, 0);
+  float tolerance = clamp(-view.z * 0.007, 0.04, 0.18);
+  vec3 viewNormal = mat3(gbufferPreviousModelView) * normal;
+  vec2 projectionScale = vec2(gbufferPreviousProjection[0].x, gbufferPreviousProjection[1].y);
+  float incidence = dot(viewNormal, view.xyz) / -view.z;
+  float depthOffset = 0.0;
+  if (abs(incidence) > 0.08) {
+    vec2 pixelOffset = vec2(historyPixel) + 0.5 - previous;
+    depthOffset = history.a * dot(2.0 * viewNormal.xy / (incidence * viewport * projectionScale), pixelOffset);
+  }
+  float agreement = 1.0 - smoothstep(tolerance * 0.5, tolerance, abs(history.a + view.z + depthOffset));
+  if (history.a <= 0.0 || agreement <= 0.0) return currentReflection;
+
+  // Camera rotation changes the projection of a static reflection. Only
+  // translation introduces specular parallax at a fixed receiving point.
+  float travel = distance(cameraPosition, previousCameraPosition);
+  float reuse = mix(0.94, 0.30, smoothstep(0.008, 0.23, travel)) * agreement;
+  vec3 discrepancy = abs(currentReflection - history.rgb);
+  if (max(discrepancy.r, max(discrepancy.g, discrepancy.b))
+      < 0.004 + 0.06 * max(currentReflection.r, max(currentReflection.g, currentReflection.b))) {
+    return mix(currentReflection, history.rgb, reuse);
+  }
+
+  const ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+  vec3 lo = currentReflection;
+  vec3 hi = currentReflection;
+  for (int i = 0; i < 4; ++i) {
+    ivec2 pixel = clamp(ivec2(gl_FragCoord.xy) + offsets[i], ivec2(0), extent - 1);
+    vec4 neighbor = texelFetch(colortex8, pixel, 0);
+    if (any(greaterThan(abs(neighbor.zw - material.zw), vec2(0.10, 0.04)))
+        || dot(normal, decode(neighbor.xy)) < 0.94) continue;
+    float nz = texelFetch(depthtex1, pixel, 0).r * 2.0 - 1.0;
+    vec2 zw = gbufferProjectionInverse[2].zw * nz + gbufferProjectionInverse[3].zw;
+    if (abs(-zw.x / zw.y - depth) > max(0.06, depth * 0.012)) continue;
+    vec3 color = texelFetch(colortex0, pixel, 0).rgb;
+    lo = min(lo, color);
+    hi = max(hi, color);
+  }
+
+  vec3 margin = vec3(0.004) + (hi - lo) * 0.20;
+  vec3 clampedHistory = clamp(history.rgb, max(lo - margin, 0.0), hi + margin);
+  return mix(currentReflection, clampedHistory, reuse);
+}
+#endif
 
 vec3 toLinear(vec3 sRGB){
 return sRGB * (sRGB * (sRGB * 0.305306011 + 0.682171111) + 0.012522878);
@@ -466,7 +527,12 @@ void main() {
         const bool isShaderGrass = false;
       #endif
 
-      vec3 viewPos = toScreenSpace(vec3(texcoord/RENDER_SCALE, z));
+      #if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD && defined RTGI_REFLECTIONS
+        vec2 surfaceUV = (gl_FragCoord.xy - rtgiJitterPixels()) / rtgiViewportSize();
+      #else
+        vec2 surfaceUV = texcoord / RENDER_SCALE;
+      #endif
+      vec3 viewPos = toScreenSpace(vec3(surfaceUV, z));
 
       vec3 playerPos = mat3(gbufferModelViewInverse) * viewPos;
       vec3 NplayerPos = normalize(playerPos);
@@ -525,21 +591,42 @@ void main() {
 
       vec3 denoisedReflections = currentFrame.rgb;
 
-      if(roughness > 0.005 && alpha < 0.9999 && !hand && !entities && !opaqueParticles
-        #if defined DISTANT_HORIZONS || defined VOXY
-          && z < 1.0
-        #endif
-      ) {
-        denoisedReflections = VLTemporalFiltering2(texcoord, playerPos, frDepth, depthtex1, hand, currentFrame.rgb, roughness);
-
-        gl_FragData[0].rgb = denoisedReflections;
-      }
+      #if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD && defined RTGI_REFLECTIONS
+        // Negative depth marks geometry without reusable reflection history.
+        // SSR still uses the absolute depth to validate the hit.
+        bool historyReceiver = z > 0.0 && z < 1.0 && alpha < 0.9999 && !hand && !entities && !opaqueParticles
+          && abs(opaqueMasks - 0.55) >= 0.01 && abs(opaqueMasks - 0.60) >= 0.01 && !isShaderGrass;
+        gl_FragData[0].a = historyReceiver ? -viewPos.z : viewPos.z;
+        if (historyReceiver) {
+          if (currentFrame.a > 0.5) {
+            denoisedReflections = rtgiFilterReflection(playerPos, stuff, normal, -viewPos.z, currentFrame.rgb);
+          }
+          gl_FragData[0].rgb = denoisedReflections;
+        }
+      #else
+        if(roughness > 0.005 && alpha < 0.9999 && !hand && !entities && !opaqueParticles
+          #if defined DISTANT_HORIZONS || defined VOXY
+            && z < 1.0
+          #endif
+        ) {
+          denoisedReflections = VLTemporalFiltering2(texcoord, playerPos, frDepth, depthtex1, hand, currentFrame.rgb, roughness);
+          gl_FragData[0].rgb = denoisedReflections;
+        }
+      #endif
 
       denoisedReflections.rgb = mix(FINAL_COLOR, denoisedReflections.rgb, F0);
       FINAL_COLOR = mix(denoisedReflections.rgb, FINAL_COLOR, alpha);
 
       #if defined OVERWORLD_SHADER && SUN_SPECULAR_MULT > 0
-        vec3 lightSourceReflection = SUN_SPECULAR_MULT * texture(colortex15, texcoord).rgb * GGX(normal, -NplayerPos, WsunVec, roughness, reflectance, metalAlbedoTint);
+        float sunRoughness = roughness;
+        #if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD && defined RTGI_REFLECTIONS
+          if (historyReceiver) sunRoughness = max(roughness, 0.05);
+        #endif
+        vec3 sunlightLobe = GGX(normal, -NplayerPos, WsunVec, sunRoughness, reflectance, metalAlbedoTint);
+        #if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD && defined RTGI_REFLECTIONS
+          if (historyReceiver) sunlightLobe /= 1.0 + max(sunlightLobe.r, max(sunlightLobe.g, sunlightLobe.b)) * 0.25;
+        #endif
+        vec3 lightSourceReflection = SUN_SPECULAR_MULT * texture(colortex15, texcoord).rgb * sunlightLobe;
         FINAL_COLOR += lightSourceReflection;
       #endif
 

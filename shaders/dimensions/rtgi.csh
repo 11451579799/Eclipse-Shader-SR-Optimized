@@ -17,6 +17,7 @@ const vec2 workGroupsRender = vec2(0.33333334, 0.33333334);
 
 uniform sampler2D depthtex1;
 uniform sampler2D colortex1;
+uniform sampler2D colortex6;
 uniform sampler2D colortex7;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelView;
@@ -41,6 +42,7 @@ struct RtgiSurface {
 	vec3 worldNormal;
 	#ifdef ECLIPSE_RTGI_WORLD
 		vec3 flatNormal;
+		float skylight;
 	#endif
 };
 
@@ -58,6 +60,7 @@ bool rtgiReadSurface(ivec2 pixel, float depth, vec2 inverseViewport, vec2 jitter
 		vec3 packedNormal = texelFetch(colortex8, pixel, 0).xyz;
 		surface.flatNormal = normalize(vec3(decodeVec2(packedNormal.x).y, decodeVec2(packedNormal.y).y,
 			decodeVec2(packedNormal.z).y) * 2.0 - 1.0);
+		surface.skylight = decodeVec2(data.w).x;
 	#endif
 	return surface.viewPosition.z < 0.0 && dot(surface.viewPosition, surface.viewPosition) <= rtgiViewRange * rtgiViewRange;
 }
@@ -72,17 +75,26 @@ bool rtgiHistoryAvailable(ivec2 renderSize) {
 		&& distance(cameraPosition, previousCameraPosition) < 8.0;
 }
 
-bool rtgiHistorySurface(ivec2 tile, bool evenFrame, vec3 normal, float depth, vec2 slope, vec2 pixel, out vec4 geometry) {
+struct RtgiHistoryFootprint {
+	vec2 pixel;
+	vec2 slope;
+	float depth;
+};
+
+float rtgiHistorySurface(ivec2 tile, bool evenFrame, vec3 normal, RtgiHistoryFootprint footprint, out vec4 geometry) {
 	geometry = evenFrame ? imageLoad(rtgiSurface1, tile) : imageLoad(rtgiSurface0, tile);
-	vec2 offset = vec2(rtgiTilePixel(tile, rtgiPreviousRenderSize)) + 0.5 - pixel;
-	return geometry.w > 0.0 && abs(geometry.w - depth) <= 0.10 + depth * 0.16
-		&& rtgiDepthError(depth, geometry.w, slope, offset) <= rtgiDepthTolerance(depth)
-		&& dot(rtgiDecodeNormal(geometry.xy), normal) >= 0.85;
+	if (geometry.w <= 0.0 || abs(geometry.w - footprint.depth) > 0.10 + footprint.depth * 0.16) return 0.0;
+	vec2 offset = vec2(rtgiTilePixel(tile, rtgiPreviousRenderSize)) + 0.5 - footprint.pixel;
+	float plane = 1.0 - rtgiDepthError(footprint.depth, geometry.w, footprint.slope, offset)
+		/ rtgiDepthTolerance(footprint.depth);
+	float alignment = dot(rtgiDecodeNormal(geometry.xy), normal);
+	if (plane <= 0.0 || alignment < 0.85) return 0.0;
+	vec2 tent = max(1.0 - abs(offset) / float(rtgiSampleStride()), 0.0);
+	return plane * plane * alignment * tent.x * tent.y;
 }
 
 bool rtgiReproject(
-	RtgiSurface surface, vec2 viewport, ivec2 tileSize, bool evenFrame,
-	out ivec2 historyTile, out float historyCount, out vec2 previousPixel
+	RtgiSurface surface, vec2 viewport, out RtgiHistoryFootprint footprint
 ) {
 	vec3 world = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz;
 	world += cameraPosition - previousCameraPosition;
@@ -94,43 +106,61 @@ bool rtgiReproject(
 	vec2 pixel = uv * viewport + rtgiPreviousJitter;
 	if (any(lessThan(pixel, vec2(0.0))) || any(greaterThanEqual(pixel, vec2(rtgiPreviousRenderSize)))) return false;
 
-	ivec2 center = min(ivec2(pixel) / rtgiStride, tileSize - 1);
-	ivec2 direction = ivec2(rtgiOctSign(pixel - vec2(rtgiTilePixel(center, rtgiPreviousRenderSize)) - 0.5));
-	vec2 slope = rtgiDepthSlope(view.xyz, mat3(gbufferPreviousModelView) * surface.worldNormal, viewport, gbufferPreviousProjection);
-	vec4 geometry;
-	// Prefer the sample from the reprojected tile. Try its adjacent samples at an edge.
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 normal = surface.flatNormal;
+	#else
+		vec3 normal = surface.worldNormal;
+	#endif
+	footprint = RtgiHistoryFootprint(pixel,
+		rtgiDepthSlope(view.xyz, mat3(gbufferPreviousModelView) * normal, viewport, gbufferPreviousProjection), -view.z);
+	return true;
+}
+
+vec4 rtgiGatherHistory(RtgiHistoryFootprint footprint, ivec2 tileSize, bool evenFrame, vec3 normal, bool samplesWorldSky,
+	bool sourceLighting, out ivec2 nearestTile, out float nearestWeight, out float count) {
+	int stride = rtgiSampleStride();
+	ivec2 base = ivec2(floor((footprint.pixel - (float(stride / 2) + 0.5)) / float(stride)));
+	vec4 lighting = vec4(0.0);
+	float weightSum = 0.0;
+	nearestTile = ivec2(0);
+	count = 0.0;
+	nearestWeight = 0.0;
 	for (int y = 0; y < 2; ++y) {
 		for (int x = 0; x < 2; ++x) {
-			ivec2 tile = center + ivec2(x, y) * direction;
+			ivec2 tile = base + ivec2(x, y);
 			if (!rtgiContains(tile, tileSize)) continue;
-			if (rtgiHistorySurface(tile, evenFrame, surface.worldNormal, -view.z, slope, pixel, geometry)) {
-				historyTile = tile;
-				historyCount = geometry.z;
-				previousPixel = pixel - rtgiPreviousJitter;
-				return true;
+			vec4 geometry;
+			float weight = rtgiHistorySurface(tile, evenFrame, normal, footprint, geometry);
+			if (weight <= 0.0) continue;
+			if (weight > nearestWeight) {
+				nearestTile = tile;
+				nearestWeight = weight;
 			}
+			if (!sourceLighting && (geometry.z < 0.0) != samplesWorldSky) continue;
+			vec4 value = sourceLighting ? imageLoad(rtgiLight, tile)
+				: imageLoad(rtgiHistory, rtgiHistoryPixel(tile, !evenFrame, imageSize(rtgiHistory)));
+			if (sourceLighting && value.a <= 0.0) continue;
+			lighting += value * weight;
+			count += abs(geometry.z) * weight;
+			weightSum += weight;
 		}
 	}
-	return false;
+	count = count / max(1e-5, weightSum) * smoothstep(0.01, 0.30, weightSum);
+	return lighting / max(1e-5, weightSum);
 }
 
-uint rtgiHash(uint value) {
-	value = (value ^ (value >> 16u)) * 0x85ebca6bu;
-	value = (value ^ (value >> 13u)) * 0xc2b2ae35u;
-	return value ^ (value >> 16u);
+vec2 rtgiSamplePhase(ivec2 tile) {
+	// Composite colortex6 exposes the pack's two-channel blue-noise texture.
+	ivec2 noisePixel = tile % textureSize(colortex6, 0);
+	return texelFetch(colortex6, noisePixel, 0).rg;
 }
 
-vec2 rtgiSamplePair(ivec2 tile, uint salt) {
-	// The pack's cloud noise is spatially smooth. Independent phases keep nearby
-	// rays from converging to the same direction across an entire wall.
-	uint seed = (uint(tile.x) + uint(tile.y) * 65536u) ^ salt;
-	uvec2 bits = uvec2(rtgiHash(seed), rtgiHash(seed ^ 0x9e3779b9u));
-	vec2 phase = vec2(bits >> 8u) * (1.0 / 16777216.0);
-	return fract(phase + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
+vec2 rtgiSamplePair(ivec2 tile) {
+	return fract(rtgiSamplePhase(tile) + vec2(0.75487767, 0.56984029) * float(frameCounter % 4096));
 }
 
 vec3 rtgiDirection(ivec2 tile, vec3 normal) {
-	vec2 samplePoint = rtgiSamplePair(tile, 0u);
+	vec2 samplePoint = rtgiSamplePair(tile);
 	float radius = sqrt(samplePoint.x);
 	float phi = 6.283185307 * samplePoint.y;
 	vec3 axis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
@@ -146,20 +176,32 @@ vec3 rtgiDirection(ivec2 tile, vec3 normal) {
 	}
 
 	void rtgiSampleDirect(ivec2 tile, bool evenFrame, vec3 position, RtgiSurface surface,
-		bool useHistory, ivec2 historyTile, float screenMotion) {
-		vec2 samplePoint = rtgiSamplePair(tile, 0x6a09e667u);
+		bool useHistory, ivec2 historyTile, float screenMotion, bool reuse) {
+		uvec4 previous = uvec4(0u);
+		if (useHistory) {
+			previous = imageLoad(rtgiDirect, rtgiHistoryPixel(historyTile, !evenFrame, imageSize(rtgiDirect)));
+			if (reuse && previous.w >= 1u) {
+				rtgiStoreDirect(tile, evenFrame, previous);
+				return;
+			}
+		}
+
+		vec2 samplePoint = rtgiSamplePair(tile + ivec2(103, 233));
 		float phi = 6.283185307 * samplePoint.y;
 		vec2 disk = sqrt(samplePoint.x) * vec2(cos(phi), sin(phi));
 		uint lightKey;
-		vec4 direct = rtgiLocalLighting(position, surface.flatNormal, surface.worldNormal, disk, lightKey);
+		// Sample both sides of an equally weighted boundary every two frames.
+		float cellPhase = rtgiSamplePhase(tile + ivec2(311, 79)).x;
+		float cellSample = fract(cellPhase + 0.61803399 * float((frameCounter / 2) % 2048)
+			+ 0.5 * float(frameCounter & 1));
+		vec4 direct = rtgiLocalLighting(position, surface.flatNormal, surface.worldNormal, disk, cellSample, true, lightKey);
 		direct.rgb *= direct.a;
 
 		uint count = 1u;
 		if (useHistory && direct.a > 0.0) {
-			uvec4 previous = imageLoad(rtgiDirect, rtgiHistoryPixel(historyTile, !evenFrame, imageSize(rtgiDirect)));
 			vec4 history = rtgiUnpackDirect(previous);
-			if (previous.z == lightKey && abs(history.a - direct.a) < 0.15) {
-				count += min(previous.w, uint(mix(15.0, 3.0, smoothstep(0.75, 5.0, screenMotion))));
+			if (previous.z == lightKey && abs(history.a - direct.a) < 0.10) {
+				count += min(previous.w, uint(mix(23.0, 6.0, smoothstep(0.75, 10.0, screenMotion))));
 				direct = mix(history, direct, 1.0 / float(count));
 			}
 		}
@@ -264,58 +306,90 @@ void main() {
 
 	bool historyAvailable = rtgiHistoryAvailable(renderSize);
 
-	RtgiSurface hit;
 	ivec2 historyTile = ivec2(0);
-	float historyCount;
-	vec2 previousPixel;
+	vec3 historyNormal = surface.worldNormal;
+	bool samplesWorldSky = false;
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 position = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
+		samplesWorldSky = rtgiVoxelReceiver(position, surface.flatNormal);
+		historyNormal = surface.flatNormal;
+	#endif
+
+	vec4 previousLighting = vec4(0.0);
+	float sampleCount = 1.0;
+	RtgiHistoryFootprint footprint;
+	bool useHistory = historyAvailable && rtgiReproject(surface, viewport, footprint);
+	float screenMotion = 0.0;
+	float historyWeight = 0.0;
+	if (useHistory) {
+		screenMotion = length(vec2(pixel) + 0.5 - jitter - footprint.pixel + rtgiPreviousJitter);
+		float historyCount;
+		previousLighting = rtgiGatherHistory(footprint, tileSize, evenFrame, historyNormal, samplesWorldSky,
+			false, historyTile, historyWeight, historyCount);
+		sampleCount += min(historyCount, mix(31.0, 8.0, smoothstep(1.0, 12.0, screenMotion)));
+	}
+	bool reuse = rtgiSampleStride() >= 4 && samplesWorldSky && sampleCount > 10.0 && historyWeight > 0.46 && screenMotion < 1.25
+		&& (((tile.x >> 2) ^ (tile.y >> 2) ^ frameCounter) & 1) == 0;
+	#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+		rtgiSampleDirect(tile, evenFrame, position, surface, historyWeight > 0.06, historyTile, screenMotion, reuse);
+	#endif
+
+	if (reuse) {
+		// Converged neighboring tiles take turns refreshing. Disocclusions
+		// and fast motion still get a fresh ray every frame.
+		vec4 geometry = vec4(rtgiEncodeNormal(historyNormal), -(sampleCount - 1.0), -surface.viewPosition.z);
+		rtgiStoreTile(tile, evenFrame, geometry, previousLighting);
+		return;
+	}
+
+	RtgiSurface hit;
 	float hitDistance;
-	vec3 direction = rtgiDirection(tile, surface.worldNormal);
+	vec3 direction = rtgiDirection(tile, normalize(mix(historyNormal, surface.worldNormal, 0.45)));
 	vec4 sampleLighting = vec4(0.0);
 	bool needsScreen = true;
 	#ifdef ECLIPSE_RTGI_WORLD
-		vec3 position = (gbufferModelViewInverse * vec4(surface.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
-		bool modeledReceiver = rtgiVoxelReceiver(position, surface.flatNormal);
-		if (modeledReceiver) {
-			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, sampleLighting) == rtgiRayUnknown;
+		if (samplesWorldSky) {
+			// A shading normal can send a sample below the actual block face.
+			// Redirect it within the geometric hemisphere for both GI and contact rays.
+			if (dot(direction, surface.flatNormal) <= 0.0)
+				direction = reflect(direction, surface.flatNormal);
+			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, surface.skylight, sampleLighting)
+				== rtgiRayUnknown;
+			if (needsScreen) sampleLighting.rgb = rtgiEscapedSkylight(direction, surface.skylight);
 		}
 	#endif
 	if (needsScreen) {
 		bool hasScreenLight = false;
 		if (rtgiTrace(surface, direction, pixel, renderSize, viewport, jitter, hit, hitDistance)) {
 			sampleLighting.a = 1.0 - smoothstep(0.16, 2.0, hitDistance);
-			if (historyAvailable && rtgiReproject(hit, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel)) {
-				vec4 direct = imageLoad(rtgiLight, historyTile);
+			RtgiHistoryFootprint hitHistory;
+			if (historyAvailable && rtgiReproject(hit, viewport, hitHistory)) {
+				float unusedWeight, unusedCount;
+				#ifdef ECLIPSE_RTGI_WORLD
+					vec3 hitNormal = hit.flatNormal;
+				#else
+					vec3 hitNormal = hit.worldNormal;
+				#endif
+				vec4 direct = rtgiGatherHistory(hitHistory, tileSize, evenFrame, hitNormal, false,
+					true, historyTile, unusedWeight, unusedCount);
 				hasScreenLight = direct.a > 0.0;
-				sampleLighting.rgb = max(direct.rgb, vec3(0.0));
+				if (hasScreenLight) sampleLighting.rgb = max(direct.rgb, vec3(0.0));
 			}
 		}
 		#ifdef ECLIPSE_RTGI_WORLD
-			if (!hasScreenLight && !modeledReceiver) {
+			if (!hasScreenLight && !samplesWorldSky) {
 				vec4 fallback;
-				rtgiWorldBounce(position, surface.flatNormal, direction, fallback);
+				rtgiWorldBounce(position, surface.flatNormal, direction, 0.0, fallback);
 				sampleLighting.rgb = fallback.rgb;
 				sampleLighting.a = max(sampleLighting.a, fallback.a);
 			}
 		#endif
 	}
 
-	vec4 previousLighting = vec4(0.0);
-	float sampleCount = 1.0;
-	bool useHistory = historyAvailable && rtgiReproject(surface, viewport, tileSize, evenFrame, historyTile, historyCount, previousPixel);
-	float screenMotion = 0.0;
-	if (useHistory) {
-		previousLighting = imageLoad(rtgiHistory, rtgiHistoryPixel(historyTile, !evenFrame, imageSize(rtgiHistory)));
-		vec2 currentPixel = vec2(pixel) + 0.5 - jitter;
-		screenMotion = length(currentPixel - previousPixel);
-		sampleCount += min(historyCount, mix(31.0, 5.0, smoothstep(1.0, 10.0, screenMotion)));
-	}
-	#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
-		rtgiSampleDirect(tile, evenFrame, position, surface, useHistory, historyTile, screenMotion);
-	#endif
-
-	vec4 geometry = vec4(rtgiEncodeNormal(surface.worldNormal), sampleCount, -surface.viewPosition.z);
+	// Store traced sky coverage in the sign of the temporal sample count.
+	vec4 geometry = vec4(rtgiEncodeNormal(historyNormal), samplesWorldSky ? -sampleCount : sampleCount, -surface.viewPosition.z);
 	// Keep contact occlusion responsive when nearby geometry changes.
-	vec2 sampleWeight = 1.0 / vec2(sampleCount, min(sampleCount, 8.0));
+	vec2 sampleWeight = 1.0 / vec2(sampleCount, min(sampleCount, 10.0));
 	vec4 lighting = mix(previousLighting, sampleLighting, sampleWeight.xxxy);
 	rtgiStoreTile(tile, evenFrame, geometry, lighting);
 }

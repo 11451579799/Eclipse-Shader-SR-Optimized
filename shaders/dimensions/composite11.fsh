@@ -212,7 +212,9 @@ vec3 blackbody(float Temp)
 }
 
 void main() {
-  /* RENDERTARGETS:7 */
+  // Translucent lighting has already consumed colortex14. Reuse its 16-bit
+  // storage for tonemapped color so sharpening does not amplify 8-bit dither.
+  /* RENDERTARGETS:14 */
 	float vignette = (1.5-dot(texcoord-0.5,texcoord-0.5)*2.);
 	vec3 col = textureLod(colortex5, texcoord, 0.0).rgb;
 
@@ -330,7 +332,7 @@ void main() {
 		col = LinearTosRGB(clamp(col * ACESOutputMat, 0.0, 1.0));
 	#endif
 
-	gl_FragData[0].rgb = clamp(int8Dither(col,texcoord),0.0,1.0);
+	gl_FragData[0] = vec4(clamp(col, 0.0, 1.0), 0.0);
 	
 	#if DOF_QUALITY == 5
 		#if FOCUS_LASER_COLOR == 0 // Red

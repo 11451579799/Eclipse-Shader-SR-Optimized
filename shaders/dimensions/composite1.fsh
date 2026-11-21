@@ -1005,7 +1005,6 @@ void main() {
 			ivec2 rtgiSize = rtgiRenderSize();
 			ivec2 rtgiTiles = rtgiTileSize(rtgiSize);
 			bool rtgiTileOrigin = rtgiIsTileOrigin(rtgiPixel, rtgiSize, rtgiTiles);
-			if (all(equal(rtgiPixel, ivec2(0)))) rtgiPublishFrame(rtgiSize);
 		#endif
 
 		#if defined DEFERRED_SPECULAR && defined DENOISED_REFLECTIONS
@@ -1566,6 +1565,32 @@ void main() {
 				skylight = 1.0;
 			#endif
 			
+			#ifdef ECLIPSE_RTGI_ACTIVE
+				if (rtgiWeight > 0.0) {
+					#ifdef ECLIPSE_RTGI_WORLD
+						float worldSkyWeight;
+					#endif
+					#ifdef ECLIPSE_RTGI_WORLD
+						vec3 rtgiNormal = FlatNormals;
+					#else
+						vec3 rtgiNormal = normal;
+					#endif
+					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, rtgiNormal, viewPos
+						#ifdef ECLIPSE_RTGI_WORLD
+							, worldSkyWeight
+						#endif
+						#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
+							, rtgiDirectSample, rtgiDirectWeight
+						#endif
+					);
+					#ifdef ECLIPSE_RTGI_WORLD
+						// Replace the corresponding share of the lightmap sky with the traced
+						// sky in the diffuse sample. Keep minimum light in doIndirectLighting.
+						if (SpecularTex.g <= 229.5 / 255.0)
+							skylight *= 1.0 - worldSkyWeight * min(RTGI_STRENGTH, 0.8) * rtgiWeight;
+					#endif
+				}
+			#endif
 			Indirect_lighting += doIndirectLighting(AmbientLightColor * skylight, MinimumLightColor, lightmap.y);
 
 			#if defined PH_ENABLE_GI && defined PHOTONICS && defined ENABLE_PHOTONICS_GI
@@ -1586,11 +1611,6 @@ void main() {
 
 			#ifdef ECLIPSE_RTGI_ACTIVE
 				if (rtgiWeight > 0.0) {
-					rtgiSample = rtgiUpsample(rtgiPixel, rtgiSize, rtgiTiles, normal, viewPos
-						#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
-							, rtgiDirectSample, rtgiDirectWeight
-						#endif
-					);
 					// Contact only attenuates ambient sky light. Lamps and direct sun are added separately.
 					Indirect_lighting *= 1.0 - rtgiSample.a * RTGI_CONTACT_STRENGTH * rtgiWeight;
 				}
@@ -1641,14 +1661,11 @@ void main() {
 			vec4 tracedBlockLight = vec4(0.0);
 			if (rtgiReceiver) {
 				#ifdef ECLIPSE_RTGI_SOFT_SHADOWS
-					if (rtgiDirectWeight > 0.025) {
-						tracedBlockLight = rtgiDirectSample;
-					} else
-				#endif
-				{
+					tracedBlockLight = rtgiDirectSample * smoothstep(0.0, 0.04, rtgiDirectWeight);
+				#else
 					tracedBlockLight = rtgiLocalLighting(feetPlayerPos + rtgiVoxelOffset(), FlatNormals, normal);
 					tracedBlockLight.rgb *= tracedBlockLight.a;
-				}
+				#endif
 			}
 			vec3 tracedBlockIrradiance = tracedBlockLight.rgb;
 		#else
@@ -1783,13 +1800,8 @@ void main() {
 						? max(Direct_lighting + blockLightColor + tracedBlockIrradiance, vec3(0.0)) * albedo : vec3(0.0);
 					Emission(outgoingLight, albedo, SpecularTex.a);
 					sourceLighting = vec4(clamp(outgoingLight, 0.0, 65504.0), 1.0);
-					#ifdef ECLIPSE_RTGI_WORLD
-						vec3 diffuseAlbedo = SpecularTex.g <= 229.5 / 255.0 ? clamp(albedo, 0.0, 1.0) : vec3(0.0);
-						vec3 indirectIrradiance = imageLoad(rtgiDenoised, rtgiFilteredPixel(rtgiPixel / rtgiStride)).rgb;
-						rtgiStoreFace(feetPlayerPos, FlatNormals, diffuseAlbedo, indirectIrradiance);
-					#endif
 				}
-				rtgiWriteDirectLight(rtgiPixel / rtgiStride, sourceLighting);
+			rtgiWriteDirectLight(rtgiPixel / rtgiSampleStride(), sourceLighting);
 			}
 		#endif
 
@@ -1827,7 +1839,7 @@ void main() {
 
 	}else{
 		#ifdef ECLIPSE_RTGI_ACTIVE
-			if (rtgiTileOrigin) rtgiWriteDirectLight(rtgiPixel / rtgiStride, vec4(0.0));
+			if (rtgiTileOrigin) rtgiWriteDirectLight(rtgiPixel / rtgiSampleStride(), vec4(0.0));
 		#endif
 
 		vec3 Background = vec3(0.0);

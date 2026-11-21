@@ -2138,6 +2138,99 @@ vec4 photonicsReflection(
 	return color;
 }
 
+#ifdef ECLIPSE_RTGI_REFLECTIONS
+bool rtgiPreviousReflectionPosition(vec3 playerPosition, out vec2 uv, out float depth) {
+	vec3 relative = playerPosition + cameraPosition - previousCameraPosition;
+	vec4 view = gbufferPreviousModelView * vec4(relative, 1.0);
+	vec4 clip = gbufferPreviousProjection * view;
+	if (clip.w <= 0.0) return false;
+	uv = clip.xy / clip.w * 0.5 + 0.5;
+	depth = -view.z;
+	return all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)));
+}
+
+vec4 rtgiPreviousReflectionColor(vec3 playerPosition, float lod) {
+	vec2 uv;
+	float depth;
+	if (!rtgiPreviousReflectionPosition(playerPosition, uv, depth)) return vec4(0.0);
+	vec2 edge = min(uv, 1.0 - uv);
+	float confidence = smoothstep(0.0, 0.025, min(edge.x, edge.y));
+	#ifdef DENOISED_REFLECTIONS
+		if (rtgiPreviousFrame + 1 == frameCounter && all(equal(rtgiPreviousRenderSize, rtgiRenderSize()))) {
+			ivec2 previous = ivec2(clamp(uv * rtgiViewportSize() + rtgiPreviousJitter,
+				vec2(0.0), vec2(rtgiPreviousRenderSize - 1)));
+			float historyDepth = abs(texelFetch(colortex12, previous, 0).a);
+			float tolerance = clamp(depth * 0.015, 0.08, 0.26);
+			confidence *= 1.0 - smoothstep(tolerance, 2.0 * tolerance, abs(historyDepth - depth));
+		}
+	#endif
+	if (confidence <= 0.0) return vec4(0.0);
+	return vec4(textureLod(colortex5, uv, lod).rgb, confidence);
+}
+
+vec4 rtgiResolveVoxelReflection(vec3 playerPos, vec3 flatNormal, vec3 direction, float roughness, out float screenAgreement) {
+	screenAgreement = 0.0;
+	RtgiVoxelHit hit;
+	vec3 position, transmission;
+	float confidence = rtgiTraceReflection(playerPos, flatNormal, direction, roughness, hit, position, transmission);
+	if (confidence <= 0.0) return vec4(0.0);
+
+	vec3 hitPlayer = position - rtgiVoxelOffset();
+	vec3 view = (gbufferModelView * vec4(hitPlayer, 1.0)).xyz;
+	vec4 clip = gbufferProjection * vec4(view, 1.0);
+	vec4 screen = vec4(0.0);
+	if (clip.w > 0.0) {
+		vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+		vec2 raster = uv * rtgiViewportSize() + rtgiJitterPixels();
+		if (all(greaterThanEqual(raster, vec2(0.0))) && all(lessThan(raster, vec2(rtgiRenderSize())))) {
+			ivec2 pixel = ivec2(raster);
+			float screenDepth = rtgiLinearDepth(texelFetch(depthtex1, pixel, 0).r);
+			float tolerance = clamp(-view.z * 0.012, 0.07, 0.20);
+			if (abs(screenDepth + view.z) < tolerance) {
+				vec3 packedSurface = texelFetch(colortex8, pixel, 0).xyz;
+				vec3 normal = vec3(decodeVec2(packedSurface.x).y, decodeVec2(packedSurface.y).y, decodeVec2(packedSurface.z).y);
+				if (dot(normal * 2.0 - 1.0, hit.normal) > 0.8) {
+					float lod = 4.0 * sqrt(roughness) * (1.0 - exp2(-0.25 * hit.distance));
+					screen = rtgiPreviousReflectionColor(hitPlayer, lod);
+					screenAgreement = screen.a;
+				}
+			}
+		}
+	}
+	vec3 radiance = screen.rgb;
+	if (screen.a < 0.995) {
+		bool materialKnown = rtgiVoxelMaterialAt(hit.voxel, hit.normal) != 0u
+			|| rtgiSolidEmitter(hit.blockId) || rtgiTorch(hit.blockId) || rtgiLantern(hit.blockId);
+		float worldWeight = confidence * (materialKnown ? 0.80 : 0.30);
+		confidence = mix(worldWeight, confidence, screen.a);
+		radiance = mix(rtgiShadeReflection(hit, position, -direction, roughness), radiance, screen.a);
+	}
+	return vec4(radiance * transmission, confidence);
+}
+
+#ifdef DENOISED_REFLECTIONS
+bool rtgiReuseFilteredReflection(vec3 playerPosition, out vec3 radiance) {
+	if ((((int(gl_FragCoord.x) >> 2) ^ (int(gl_FragCoord.y) >> 2) ^ frameCounter) & 1) != 0
+		|| distance(cameraPosition, previousCameraPosition) > 0.012
+		|| rtgiPreviousFrame + 1 != frameCounter
+		|| abs(sunElevation - rtgiPreviousSun) > 0.002
+		|| abs(rainStrength - rtgiPreviousRain) > 0.006) return false;
+	ivec2 size = rtgiRenderSize();
+	if (any(notEqual(rtgiPreviousRenderSize, size))) return false;
+	vec2 uv;
+	float depth;
+	if (!rtgiPreviousReflectionPosition(playerPosition, uv, depth)) return false;
+	vec2 raster = uv * rtgiViewportSize() + rtgiPreviousJitter;
+	if (any(lessThan(raster, vec2(1.0))) || any(greaterThan(raster, vec2(size) - 1.0))) return false;
+	if (length(raster - gl_FragCoord.xy) > 3.0) return false;
+	vec4 previous = texelFetch(colortex12, ivec2(raster), 0);
+	if (previous.a <= 0.0 || abs(previous.a - depth) > max(0.028, depth * 0.006)) return false;
+	radiance = previous.rgb;
+	return true;
+}
+#endif
+#endif
+
 vec4 getEnvironmentReflections(
 	vec3 reflectedVector,
 	vec3 flatNormal,
@@ -2201,6 +2294,19 @@ vec4 getEnvironmentReflections(
 		if(depthCheck) projMatrix = dhVoxyProjectionPrev;
 	#else
 		mat4 projMatrix = gbufferPreviousProjection;
+	#endif
+
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+		if (!isHand && !depthCheck && raytracePos.z < 0.9999999) {
+			// Screen traversal returns a raster hit. Unjitter it before moving
+			// back to world space, and test visibility in the previous frame.
+			vec3 hit = raytracePos;
+			hit.xy -= rtgiJitterPixels() / rtgiViewportSize();
+			vec3 playerHit = (gbufferModelViewInverse * vec4(toScreenSpace2(hit, false), 1.0)).xyz;
+			vec4 color = rtgiPreviousReflectionColor(playerHit, LOD);
+			screenReliability = color.a;
+			return color;
+		}
 	#endif
 
 	vec3 previousPosition = mat3(gbufferModelViewInverse) * toScreenSpace2(raytracePos, depthCheck) + gbufferModelViewInverse[3].xyz + (cameraPosition - previousCameraPosition);
@@ -2349,6 +2455,9 @@ vec3 specularReflections(
 	// roughness = 0.0;
 // }
 	bool isMetal = f0 > 229.5/255.0;
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+		bool stableReceiver = worldReflectionReceiver && length(playerPos) < 44.0;
+	#endif
 
 	// get reflected vector
 	mat3 basis = CoordBase(normal);
@@ -2357,7 +2466,16 @@ vec3 specularReflections(
 	viewDir.z = abs(viewDir.z);
 
 	#if defined FORWARD_ROUGH_REFLECTION || defined DEFERRED_ROUGH_REFLECTION
-		vec3 samplePoints = SampleVNDFGGX(viewDir, roughness, noise.xy);
+		float sampleRoughness = roughness;
+		#ifdef ECLIPSE_RTGI_REFLECTIONS
+			if (stableReceiver) {
+				// Bound subpixel mirror jitter. Rough reflections still sample
+				// the full GGX footprint.
+				sampleRoughness *= smoothstep(0.005, 0.05, roughness);
+				noise.y = mix(0.5, noise.y, smoothstep(0.005, 0.05, roughness));
+			}
+		#endif
+		vec3 samplePoints = SampleVNDFGGX(viewDir, max(sampleRoughness, 1e-5), noise.xy);
 		vec3 reflectedVector_L = basis * reflect(-normalize(viewDir), samplePoints);
 
 		reflectedVector_L = isHand ? reflect(NplayerPos, normal) : reflectedVector_L;
@@ -2400,9 +2518,30 @@ vec3 specularReflections(
 	
 	vec4 enviornmentReflection = vec4(0.0);
 	float backgroundReflectMask = lightmap;
+	#ifdef ECLIPSE_RTGI_REFLECTIONS
+		// Diffuse irradiance already describes low-energy, very broad lobes.
+		// Leave smooth surfaces, grazing reflections and conductors on the ray path.
+		float normalIncidence = dot(-NplayerPos, normal);
+		float broadLobe = stableReceiver && !isMetal && f0 < 0.06
+			? smoothstep(0.30, 0.50, roughness) * smoothstep(0.25, 0.55, normalIncidence) : 0.0;
+		reflectionVisibilty = mix(reflectionVisibilty, 1.0, broadLobe);
+	#endif
 
 	#if defined DEFERRED_SPECULAR && defined DENOISED_REFLECTIONS
 		SunReflectionAlpha = backgroundReflectMask;
+		#ifdef ECLIPSE_RTGI_REFLECTIONS
+			if (broadLobe >= 1.0) {
+				specularOut.rgb = diffuseLighting;
+				return diffuseLighting;
+			}
+			float directHighlightPower = lightmap * max(lightColor.r, max(lightColor.g, lightColor.b));
+			if (stableReceiver && directHighlightPower < 0.018 && reflectionVisibilty < 1.0 && roughness >= 0.025
+				&& rtgiReuseFilteredReflection(playerPos, specularOut.rgb)) {
+				specularOut.a = 0.0;
+				SunReflectionAlpha = 0.0;
+				return isMetal ? vec3(0.0) : diffuseLighting;
+			}
+		#endif
 	#endif
 
 	#if defined DEFERRED_BACKGROUND_REFLECTION || defined FORWARD_BACKGROUND_REFLECTION || DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0 || defined ECLIPSE_RTGI_REFLECTIONS
@@ -2423,9 +2562,26 @@ vec3 specularReflections(
 
 			#ifdef ECLIPSE_RTGI_REFLECTIONS
 				float screenReliability = 0.0;
+				float worldSupport = stableReceiver ? 1.0 - smoothstep(0.12, 0.42, roughness) : 0.0;
+				if (!isMetal && f0 < 0.06) {
+					// Weak, broad dielectric lobes rarely benefit from a second
+					// traversal. Retain it at grazing angles and on clear mirrors.
+					worldSupport *= 1.0 - smoothstep(0.07, 0.22, roughness)
+						* smoothstep(0.25, 0.65, normalIncidence);
+				}
+				bool voxelFirst = worldSupport > 0.0 && isMetal && roughness <= 0.035;
+				vec4 worldReflection = vec4(0.0);
+				float matchingHit = 0.0;
+				if (voxelFirst) {
+					worldReflection = rtgiResolveVoxelReflection(playerPos, flatNormal, reflectedVector_L, roughness, matchingHit);
+					worldReflection.a *= worldSupport;
+				}
 			#endif
 			#if DEFERRED_SSR_QUALITY > 0 || FORWARD_SSR_QUALITY > 0
 				vec3 backgroundTint = vec3(1.0);
+				#ifdef ECLIPSE_RTGI_REFLECTIONS
+					if (worldReflection.a * matchingHit < 0.985)
+				#endif
 				enviornmentReflection = getEnvironmentReflections(reflectedVector_L, flatNormal, normal, playerPos, viewPos, noise, isHand, roughness, backgroundReflectMask, backgroundTint
 				#ifdef ECLIPSE_RTGI_REFLECTIONS
 					, screenReliability
@@ -2439,11 +2595,17 @@ vec3 specularReflections(
 				#endif
 			#endif
 			#ifdef ECLIPSE_RTGI_REFLECTIONS
-				float missingScreen = 1.0 - enviornmentReflection.a * screenReliability;
-				float traceWeight = (1.0 - smoothstep(0.15, 0.42, roughness)) * missingScreen;
-				if (worldReflectionReceiver && traceWeight > 0.001) {
-					vec4 worldReflection = rtgiWorldReflection(playerPos, flatNormal, reflectedVector_L, roughness);
-					float worldWeight = worldReflection.a * traceWeight;
+				// A reprojected voxel hit can skip traversal. Otherwise prefer
+				// the textured screen result and use the voxel result as fill.
+				float traceWeight = worldSupport * (1.0 - screenReliability);
+				if (!voxelFirst && traceWeight > 0.001) {
+					worldReflection = rtgiResolveVoxelReflection(playerPos, flatNormal, reflectedVector_L, roughness, matchingHit);
+					worldReflection.a *= traceWeight;
+				} else if (voxelFirst) {
+					worldReflection.a *= 1.0 - screenReliability;
+				}
+				if (worldReflection.a > 0.0) {
+					float worldWeight = worldReflection.a;
 					float screenWeight = enviornmentReflection.a * (1.0 - worldWeight);
 					float reflectedWeight = screenWeight + worldWeight;
 					enviornmentReflection = vec4(
