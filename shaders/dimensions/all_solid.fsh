@@ -501,52 +501,47 @@ void main() {
 	vec3 viewVector = normalize(tbnMatrix*fragpos);
 	float dist = length(playerpos);
 
-	float falloff = min(max(1.0-dist/MAX_OCCLUSION_DISTANCE,0.0) * 2.0,1.0);
-
-	falloff = pow(1.0-pow(1.0-falloff,1.0),2.0);
-
-	// falloff =  1;
-
-	float maxdist = MAX_OCCLUSION_DISTANCE;
-	if(!ifPOM) maxdist = 0.0;
+	float falloff = clamp(2.0 * (1.0 - dist / MAX_OCCLUSION_DISTANCE), 0.0, 1.0);
+	float grazingFade = smoothstep(0.015, 0.085, -viewVector.z);
+	float pomDepth = POM_DEPTH * falloff * falloff * grazingFade;
 
 	#if defined DEPTH_WRITE_POM
 		gl_FragDepth = gl_FragCoord.z;
 	#endif
 
 	#if !defined BLOCKENTITIES && !defined ENTITIES && !defined HAND && defined SHADER_GRASS && !defined COLORWHEEL && defined WORLD && !defined CUTOUT
-	 if (falloff > 0.0 && !ShaderGrass)
+	 if (ifPOM && pomDepth > 0.0 && !ShaderGrass)
 	#else
-	 if (falloff > 0.0)
+	 if (ifPOM && pomDepth > 0.0)
 	#endif
 	{
 		float depthmap = readNormal(data_in.texcoord.st).a;
-		float pomdepth = POM_DEPTH * falloff;
-
- 		if ( viewVector.z < 0.0 && depthmap < 0.9999 && depthmap > 0.00001) {	
-			float noise = BN;
+		if (depthmap < 0.9999 && depthmap > 0.00001) {
 			#ifdef Adaptive_Step_length
-				depthmap = clamp(1.0 - depthmap * depthmap, 0.1, 1.0);
-				vec3 interval = (viewVector.xyz / -viewVector.z * MAX_OCCLUSION_POINTS_DIV * pomdepth) * depthmap;
+				float grazing = 1.0 - smoothstep(0.08, 0.85, -viewVector.z);
+				int layers = int(ceil(float(MAX_OCCLUSION_POINTS) * mix(0.4, 1.0, grazing)));
 			#else
-				vec3 interval = viewVector.xyz /-viewVector.z * MAX_OCCLUSION_POINTS_DIV * pomdepth;
+				int layers = MAX_OCCLUSION_POINTS;
 			#endif
-			vec3 coord = vec3(data_in.texcoord.st , 1.0);
-
-			coord += interval * noise;
-
-			float sumVec = noise;
-			for (int loopCount = 0; (loopCount < MAX_OCCLUSION_POINTS) && (1.0 - pomdepth + pomdepth * readNormal(coord.st).a) < coord.p && coord.p >= 0.0; ++loopCount) {
-				coord = coord + interval; 
-				sumVec += 1.0; 
+			vec3 interval = viewVector * (pomDepth / (-viewVector.z * float(layers)));
+			vec3 baseCoord = vec3(data_in.texcoord.st, 1.0);
+			vec3 coord = baseCoord;
+			float gap = (1.0 - depthmap) * pomDepth;
+			float sampleStep = 0.0;
+			for (int layer = 1; layer <= layers; ++layer) {
+				sampleStep = float(layer);
+				coord = baseCoord + interval * sampleStep;
+				float nextGap = (1.0 - readNormal(coord.st).a) * pomDepth + interval.z * sampleStep;
+				if (nextGap <= 0.0) {
+					float fraction = gap / max(gap - nextGap, 1e-8);
+					sampleStep += clamp(fraction, 0.0, 1.0) - 1.0;
+					coord = baseCoord + interval * sampleStep;
+					break;
+				}
+				gap = nextGap;
 			}
-
 			#if defined POM_OFFSET_SHADOW_BIAS
-				#ifdef Adaptive_Step_length
-					saveDepth += clamp(MAX_OCCLUSION_POINTS_DIV * depthmap-0.0001, 0.0, 1.0);
-				#else
-					saveDepth += clamp(MAX_OCCLUSION_POINTS_DIV-0.0001, 0.0, 1.0);
-				#endif
+				saveDepth = falloff * falloff * grazingFade * min(sampleStep, 1.0) * MAX_OCCLUSION_POINTS_DIV;
 			#endif
 	
 			if (coord.t < mincoord) {
@@ -556,10 +551,10 @@ void main() {
 				}
 			}
 			
-			adjustedTexCoord = mix(fract(coord.st)*data_in.texcoordam.pq+data_in.texcoordam.st, adjustedTexCoord, max(dist-MIX_OCCLUSION_DISTANCE,0.0)/(MAX_OCCLUSION_DISTANCE-MIX_OCCLUSION_DISTANCE));
+			adjustedTexCoord = fract(coord.st) * data_in.texcoordam.pq + data_in.texcoordam.st;
 
 			#if defined DEPTH_WRITE_POM
-				vec3 truePos = fragpos + sumVec*inverseMatrix(tbnMatrix)*interval;
+				vec3 truePos = fragpos + sampleStep * (inverseMatrix(tbnMatrix) * interval);
 				gl_FragDepth = toClipSpace3(truePos).z;
 			#endif
 		}

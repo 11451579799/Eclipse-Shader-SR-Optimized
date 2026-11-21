@@ -308,12 +308,14 @@ void main() {
   		VL_abs = clamp((1.0-VL_abs)*bloomyFog_Mult*0.75*(1.0+rainStrength) * (1.0-purkinje*0.3),0.0,1.0)*clamp(1.0-pow(cdist(texcoord),15.0),0.0,1.0);
 		col = (mix(col, fogBloom, VL_abs) + bloom*lightScat) * exposure.rgb;
 	
-  		float lum = dot(col, vec3(0.15,0.3,0.55));
-		float lum2 = dot(col, vec3(0.85,0.7,0.45));
-		float rodLum = lum2*200.0;
-		float rodCurve = clamp(mix(1.0, rodLum/(2.5+rodLum), purkinje),0.0,1.0);
-
-		col = mix(lum * vec3(Purkinje_R, Purkinje_G, Purkinje_B) * Purkinje_Multiplier, col, rodCurve);
+		// Adapt the color response in low light without introducing illumination.
+		const vec3 photopicWeights = vec3(0.2126, 0.7152, 0.0722);
+		float luminance = max(dot(col, photopicWeights), 0.0);
+		float tintStrength = purkinje * (Purkinje_Multiplier / (5.0 + Purkinje_Multiplier))
+			* (0.0125 / (0.0125 + luminance));
+		vec3 adapted = col * mix(vec3(1.0), vec3(Purkinje_R, Purkinje_G, Purkinje_B), tintStrength);
+		if (luminance > 1e-8)
+			col = adapted * (luminance / max(dot(adapted, photopicWeights), 1e-8));
 	#else
   		VL_abs = clamp((1.0-VL_abs)*bloomyFog_Mult*0.75*(1.0+rainStrength),0.0,1.0)*clamp(1.0-pow(cdist(texcoord),15.0),0.0,1.0);
 		col = (mix(col, fogBloom, VL_abs) + bloom*lightScat) * exposure.rgb;

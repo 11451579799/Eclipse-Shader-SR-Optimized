@@ -19,6 +19,13 @@
 	#endif
 	uniform sampler2D shadowtex0;
 	uniform sampler2D shadowtex1;
+	#if defined ECLIPSE_RTGI_TRACE && defined IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+		const bool shadowHardwareFiltering = true;
+		uniform sampler2DShadow shadowtex0HW;
+		#ifdef TRANSLUCENT_COLORED_SHADOWS
+			uniform sampler2DShadow shadowtex1HW;
+		#endif
+	#endif
 	#include "/lib/rtgi_voxels.glsl"
 	#include "/lib/rtgi_voxel_material.glsl"
 	#include "/lib/rtgi_face_cache.glsl"
@@ -45,6 +52,29 @@
 			}
 		#endif
 		return vec3(1.0);
+	}
+
+	vec3 rtgiFilteredSunVisibility(vec2 uv, ivec2 size, float reference) {
+		#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+			float clearVisibility = textureLod(shadowtex0HW, vec3(uv, reference), 0.0);
+			#ifdef TRANSLUCENT_COLORED_SHADOWS
+				if (clearVisibility >= 1.0) return vec3(1.0);
+				float opaqueVisibility = textureLod(shadowtex1HW, vec3(uv, reference), 0.0);
+				if (opaqueVisibility <= clearVisibility + 1e-5) return vec3(clearVisibility);
+			#else
+				return vec3(clearVisibility);
+			#endif
+		#endif
+		// Read the original depth and tint for each texel of a colored edge.
+		vec2 raster = uv * vec2(size) - 0.5;
+		vec2 blend = fract(raster);
+		ivec2 base = ivec2(floor(raster));
+		ivec2 first = clamp(base, ivec2(0), size - 1);
+		ivec2 last = clamp(base + 1, ivec2(0), size - 1);
+		return mix(
+			mix(rtgiSunVisibility(first, reference), rtgiSunVisibility(ivec2(last.x, first.y), reference), blend.x),
+			mix(rtgiSunVisibility(ivec2(first.x, last.y), reference), rtgiSunVisibility(last, reference), blend.x),
+			blend.y);
 	}
 
 	vec3 rtgiSunIrradiance(vec3 facePosition, vec3 faceNormal) {
@@ -80,16 +110,7 @@
 		float texelWidth = 2.0 / (abs(projectionScale.x) * float(shadowSize.x) * max(distortion, 0.25));
 		float worldBias = clamp(0.018 + texelWidth * 0.45 / incidence, 0.018, 0.12);
 		float bias = worldBias * abs(projectionScale.z) / 12.0;
-		vec2 shadowRaster = shadowUV * vec2(shadowSize) - 0.5;
-		vec2 blend = fract(shadowRaster);
-		ivec2 first = clamp(ivec2(floor(shadowRaster)), ivec2(0), shadowSize - 1);
-		ivec2 last = clamp(ivec2(floor(shadowRaster)) + 1, ivec2(0), shadowSize - 1);
-		float unbiasedReference = reference - bias;
-		// Compare each depth before interpolation; interpolated depths leak across blockers.
-		vec3 visibility = mix(
-			mix(rtgiSunVisibility(first, unbiasedReference), rtgiSunVisibility(ivec2(last.x, first.y), unbiasedReference), blend.x),
-			mix(rtgiSunVisibility(ivec2(first.x, last.y), unbiasedReference), rtgiSunVisibility(last, unbiasedReference), blend.x),
-			blend.y);
+		vec3 visibility = rtgiFilteredSunVisibility(shadowUV, shadowSize, reference - bias);
 		#ifdef USE_CUSTOM_DIFFUSE_LIGHTING_COLORS
 			lightColor = luma(lightColor) * vec3(DIRECTLIGHT_DIFFUSE_R, DIRECTLIGHT_DIFFUSE_G, DIRECTLIGHT_DIFFUSE_B);
 		#endif

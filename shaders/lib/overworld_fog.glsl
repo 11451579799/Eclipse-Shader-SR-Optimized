@@ -83,7 +83,7 @@ vec4 GetVolumetricFog(
 		return vec4(0.0,0.0,0.0,1.0);
 	#endif
 	
-	int SAMPLECOUNT = VL_SAMPLES;
+	const int SAMPLECOUNT = VL_SAMPLES;
 
 	//project pixel position into projected shadowmap space
 	vec3 dVWorld = mat3(gbufferModelViewInverse) * viewPosition;
@@ -121,6 +121,9 @@ vec4 GetVolumetricFog(
 	float dL = length(dVWorld)/8.0;
 
 	const float expFactor = 11.0;
+	const float intervalExponent = log(expFactor) / float(SAMPLECOUNT);
+	const float intervalGrowth = exp(intervalExponent);
+	vec2 intervalPhase = exp(dither * intervalExponent);
 
 	/// -------------  COLOR/LIGHTING STUFF ------------- \\\
 	
@@ -173,8 +176,9 @@ vec4 GetVolumetricFog(
 
 
 	for (int i = 0; i < SAMPLECOUNT; i++) {
-		float d = (pow(expFactor, float(i+dither.x)/float(SAMPLECOUNT))/expFactor - 1.0/expFactor)/(1-1.0/expFactor);
-		float dd = pow(expFactor, float(i+dither.y)/float(SAMPLECOUNT)) * log(expFactor) / float(SAMPLECOUNT)/(expFactor-1.0);
+		float d = (intervalPhase.x - 1.0) / (expFactor - 1.0);
+		float dd = intervalPhase.y * intervalExponent / (expFactor - 1.0);
+		intervalPhase *= intervalGrowth;
 
 		// #ifdef VOLUMETRIC_CLOUDS
 		// 	// check if the fog intersects clouds
@@ -200,11 +204,15 @@ vec4 GetVolumetricFog(
 				shadowPos = shadowPos*vec3(0.5,0.5,0.5/6.0)+0.5;
 				if (shadowPos.z < 1.0 && shadowPos.z > 0.0) {
 					#ifdef TRANSLUCENT_COLORED_SHADOWS
-						sh = vec3(texture(shadowtex0HW, shadowPos).x);
-
-						if(texture(shadowtex1HW, shadowPos).x > shadowPos.z && sh.x < 1.0){
-							vec4 translucentShadow = texture(shadowcolor0, shadowPos.xy);
-							if(translucentShadow.a < 0.9) sh = normalize(translucentShadow.rgb+0.0001);
+						float clearVisibility = texture(shadowtex0HW, shadowPos);
+						sh = vec3(clearVisibility);
+						if (clearVisibility < 1.0) {
+							float tintedVisibility = max(texture(shadowtex1HW, shadowPos) - clearVisibility, 0.0);
+							if (tintedVisibility > 0.0) {
+								vec4 translucentShadow = texture(shadowcolor0, shadowPos.xy);
+								if (translucentShadow.a < 0.9)
+									sh += tintedVisibility * normalize(translucentShadow.rgb + 0.0001);
+							}
 						}
 					#else
 						sh = vec3(texture(shadowtex0HW, shadowPos).x);

@@ -749,28 +749,30 @@ vec3 ComputeShadowMap_COLOR(in vec3 projectedShadowPosition, float distortFactor
 		
 		for(int i = 0; i < samples; i++){
 			vec2 offsetS = CleanSample(i, samples - 1, noise) * rdMul;
-			projectedShadowPosition.xy += offsetS;
+			vec3 shadowTap = projectedShadowPosition + vec3(offsetS, 0.0);
 	#else
 		int samples = 1;
+		vec3 shadowTap = projectedShadowPosition;
 	#endif
 
 	#ifdef TRANSLUCENT_COLORED_SHADOWS
-		float opaqueShadow = texture(shadowtex0HW, projectedShadowPosition).x;
-		float opaqueShadowT = texture(shadowtex1HW, projectedShadowPosition).x;
-		vec4 translucentShadow = texture(shadowcolor0, projectedShadowPosition.xy);
+		float opaqueShadow = texture(shadowtex0HW, shadowTap);
+		float opaqueShadowT = texture(shadowtex1HW, shadowTap);
+		vec4 translucentShadow = texture(shadowcolor0, shadowTap.xy);
 
 		float shadowAlpha = pow(1.0-pow(1.0-translucentShadow.a,2.0),5.0);
 		translucentShadow.rgb = normalize(translucentShadow.rgb*translucentShadow.rgb + 0.0001) * (1.0-shadowAlpha);
 
 		// translucentTint += mix(translucentShadow.rgb * mix(opaqueShadowT, 1.0, backface), vec3(1.0), max(opaqueShadow, backface * (shadowAlpha < 1.0 ? 0.0 : 1.0)));
 		// shadowColor += directLightColor * mix(translucentShadow.rgb * opaqueShadowT, vec3(1.0), opaqueShadow);
-		shadowColor += mix(translucentShadow.rgb * opaqueShadowT, vec3(1.0), opaqueShadow);
+		// The two Iris comparisons partition the sample into clear, tinted and blocked coverage.
+		shadowColor += vec3(opaqueShadow) + translucentShadow.rgb * max(opaqueShadowT - opaqueShadow, 0.0);
 		
 		translucentTint += mix(translucentShadow.rgb, vec3(1.0), max(opaqueShadow, backface * (shadowAlpha < 1.0 ? 0.0 : 1.0)));
 		FUNNYSHADOW += ((1.0-shadowAlpha) * opaqueShadowT)/samples;
 	#else
 		// shadowColor += directLightColor * texture(shadowtex0HW, projectedShadowPosition).x;
-		shadowColor += vec3(1.0) * texture(shadowtex0HW, projectedShadowPosition).x;
+		shadowColor += vec3(texture(shadowtex0HW, shadowTap));
 	#endif
 
 

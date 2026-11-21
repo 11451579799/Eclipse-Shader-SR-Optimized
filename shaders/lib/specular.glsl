@@ -2156,13 +2156,13 @@ vec4 rtgiPreviousReflectionColor(vec3 playerPosition, float lod) {
 	vec2 edge = min(uv, 1.0 - uv);
 	float confidence = smoothstep(0.0, 0.025, min(edge.x, edge.y));
 	#ifdef DENOISED_REFLECTIONS
-		if (rtgiPreviousFrame + 1 == frameCounter && all(equal(rtgiPreviousRenderSize, rtgiRenderSize()))) {
-			ivec2 previous = ivec2(clamp(uv * rtgiViewportSize() + rtgiPreviousJitter,
-				vec2(0.0), vec2(rtgiPreviousRenderSize - 1)));
-			float historyDepth = abs(texelFetch(colortex12, previous, 0).a);
-			float tolerance = clamp(depth * 0.015, 0.08, 0.26);
-			confidence *= 1.0 - smoothstep(tolerance, 2.0 * tolerance, abs(historyDepth - depth));
-		}
+		if (rtgiPreviousFrame + 1 != frameCounter || any(notEqual(rtgiPreviousRenderSize, rtgiRenderSize())))
+			return vec4(0.0);
+		ivec2 previous = ivec2(clamp(uv * rtgiViewportSize() + rtgiPreviousJitter,
+			vec2(0.0), vec2(rtgiPreviousRenderSize - 1)));
+		float historyDepth = abs(texelFetch(colortex12, previous, 0).a);
+		float tolerance = clamp(depth * 0.015, 0.08, 0.26);
+		confidence *= 1.0 - smoothstep(tolerance, 2.0 * tolerance, abs(historyDepth - depth));
 	#endif
 	if (confidence <= 0.0) return vec4(0.0);
 	return vec4(textureLod(colortex5, uv, lod).rgb, confidence);
@@ -2244,7 +2244,7 @@ vec4 getEnvironmentReflections(
 	inout float backgroundReflectMask,
 	inout vec3 backgroundTint
 	#ifdef ECLIPSE_RTGI_REFLECTIONS
-		, out float screenReliability
+		, bool worldReceiver, out float screenReliability
 	#endif
 	#ifdef FORWARD_SPECULAR
 	,bool isWater
@@ -2281,6 +2281,11 @@ vec4 getEnvironmentReflections(
 	#else
 		raytracePos = rayTraceSpeculars(mat3(gbufferModelView) * reflectedVector, viewPos, noise.y, quality, isHand, reflectionLength, depthCheck);
 		if (raytracePos.z > 1.00001) return reflection;
+		#ifdef ECLIPSE_RTGI_REFLECTIONS
+			// A screen-space ray can reach sky behind the depth silhouette while
+			// still being occluded by off-screen geometry.
+			if (worldReceiver && isEyeInWater == 0 && raytracePos.z >= 0.9999999) return reflection;
+		#endif
 	#endif
 	
 	// use higher LOD as the reflection goes on, to blur it. this helps denoise a little.
@@ -2584,7 +2589,7 @@ vec3 specularReflections(
 				#endif
 				enviornmentReflection = getEnvironmentReflections(reflectedVector_L, flatNormal, normal, playerPos, viewPos, noise, isHand, roughness, backgroundReflectMask, backgroundTint
 				#ifdef ECLIPSE_RTGI_REFLECTIONS
-					, screenReliability
+					, stableReceiver, screenReliability
 				#endif
 				#ifdef FORWARD_SPECULAR
 				 ,isWater
