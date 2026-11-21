@@ -15,8 +15,10 @@ uniform int frameCounter;
 void main() {
 	uint slot = gl_GlobalInvocationID.x;
 	uint pendingSlot = slot + rtgiFaceCacheSize;
-	if (rtgiFaces[pendingSlot].data.x == uint(frameCounter) + 1u)
+	if (rtgiFaces[pendingSlot].data.x == uint(frameCounter) + 1u) {
 		rtgiFaces[slot] = rtgiFaces[pendingSlot];
+		rtgiFaceGuides[slot] = rtgiFaceGuides[pendingSlot];
+	}
 }
 #else
 const ivec3 workGroups = ivec3(0, 0, 0);

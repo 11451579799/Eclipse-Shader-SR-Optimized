@@ -324,7 +324,10 @@ const float entityShadowDistanceMul = 0.25; // [0.01 0.02 0.03 0.04 0.05 0.10 0.
 	#define EMISSIVE_TYPE EMISSIVE_TYPE_SETTING
 #endif
 
-// #define POM
+#define POM_MODE 0 // [0 1 2]
+#if POM_MODE > 0
+    #define POM
+#endif
 // #define Horrible_slope_normals
 #define Adaptive_Step_length
 #define POM_DEPTH 0.25 // [0.025 0.05 0.075 0.1 0.125 0.15 0.20 0.25 0.30 0.50 0.75 1.0]

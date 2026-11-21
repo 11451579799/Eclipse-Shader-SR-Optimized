@@ -11,10 +11,12 @@ struct RtgiFaceEntry {
 #if defined ECLIPSE_RTGI_CACHE_UPDATE || defined ECLIPSE_RTGI_CACHE_PUBLISH || defined ECLIPSE_RTGI_RESET
 	layout(std430, binding = 7) coherent buffer RtgiFaceHistory {
 		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize * 2u];
+		uint rtgiFaceGuides[rtgiFaceCacheSize * 2u];
 	};
 #else
 	layout(std430, binding = 7) readonly buffer RtgiFaceHistory {
 		RtgiFaceEntry rtgiFaces[rtgiFaceCacheSize * 2u];
+		uint rtgiFaceGuides[rtgiFaceCacheSize * 2u];
 	};
 #endif
 

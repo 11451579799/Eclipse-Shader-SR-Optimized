@@ -331,3 +331,9 @@
 #define BLOCK_INVISIBLE_LIGHT 497
 #define BLOCK_END_PORTAL 500
 #define BLOCK_SIGN 501
+
+// Fence-gate geometry IDs; kept below the 2048-entry block-data LUT.
+#define BLOCK_GATE_CLOSED_NS 506
+#define BLOCK_GATE_CLOSED_EW 507
+#define BLOCK_GATE_OPEN_NS 508
+#define BLOCK_GATE_OPEN_EW 509

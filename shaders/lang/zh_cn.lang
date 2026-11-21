@@ -1297,3 +1297,9 @@ option.MOTION_BLUR.comment = §b这是什么？§r 此效果使整个屏幕在�
 option.CHROMATIC_ABERRATION.comment = §b这是什么？§r 此效果使屏幕边缘出现红色和蓝色的色彩偏移。 §a性能消耗：§r 非常非常低
 option.VIGNETTE.comment = §b这是什么？§r 此效果使屏幕边缘越靠近边缘越暗。 §a性能消耗：§r 非常非常低
 option.TONEMAP.comment = §b这是什么？§r 这将内部 HDR 或着色器正在进行的任何颜色范围适配到您的 SDR 显示器上看起来不错。它将控制一般的色彩处理 - 对比度、饱和度、白点、黑点、色调偏移、到白色的路径等 - 每个都有不同的外观。
+
+    option.POM_MODE = 视差样式
+    value.POM_MODE.0 = 关闭
+    value.POM_MODE.1 = 锐利（原版）
+    value.POM_MODE.2 = 平滑（64x 及以上 PBR）
+    option.POM_MODE.comment = 选择关闭、锐利或平滑。平滑模式适用于 64x 及以上 PBR 资源包。

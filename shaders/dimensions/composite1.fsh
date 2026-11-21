@@ -733,7 +733,7 @@ vec4 BilateralUpscale_VLFOG(sampler2D tex, sampler2D depth, float referenceDepth
 
 #if defined OVERWORLD_SHADER || (defined END_ISLAND_LIGHT && defined END_SHADER)
 
-vec3 ComputeShadowMap_COLOR(in vec3 projectedShadowPosition, float distortFactor, float noise, float shadowBlockerDepth, float NdotL, float maxDistFade, vec3 directLightColor, inout float FUNNYSHADOW, inout vec3 tintedSunlight, bool isSSS ,inout float shadowDebug){
+vec3 ComputeShadowMap_COLOR(in vec3 projectedShadowPosition, vec2 receiverDepthGradient, float distortFactor, float noise, float shadowBlockerDepth, float NdotL, float maxDistFade, vec3 directLightColor, inout float FUNNYSHADOW, inout vec3 tintedSunlight, bool isSSS ,inout float shadowDebug){
 
 	// if(maxDistFade <= 0.0) return 1.0;
 	float backface = NdotL <= 0.0 ? 1.0 : 0.0;
@@ -749,7 +749,9 @@ vec3 ComputeShadowMap_COLOR(in vec3 projectedShadowPosition, float distortFactor
 		
 		for(int i = 0; i < samples; i++){
 			vec2 offsetS = CleanSample(i, samples - 1, noise) * rdMul;
-			vec3 shadowTap = projectedShadowPosition + vec3(offsetS, 0.0);
+			// Compare at the receiver plane at each filter tap, retaining the existing bias.
+			float receiverDepthOffset = clamp(dot(receiverDepthGradient, offsetS), -0.001, 0.001);
+			vec3 shadowTap = projectedShadowPosition + vec3(offsetS, receiverDepthOffset);
 	#else
 		int samples = 1;
 		vec3 shadowTap = projectedShadowPosition;
@@ -1173,6 +1175,43 @@ void main() {
 		
 		vec3 feetPlayerPos = mat3(gbufferModelViewInverse) * viewPos;
 		vec3 feetPlayerPos_normalized = normalize(feetPlayerPos);
+		#if defined BASIC_SHADOW_FILTER && (defined OVERWORLD_SHADER || (defined END_ISLAND_LIGHT && defined END_SHADER))
+			// Derivatives must execute before the per-pixel sky/light branches. This
+			// unbiased projection provides the receiver plane, while the existing
+			// geometric and POM biases remain applied to the actual comparison.
+			#ifdef OVERWORLD_SHADER
+				vec3 receiverPlayerPos = feetPlayerPos + gbufferModelViewInverse[3].xyz;
+				#ifdef CUSTOM_MOON_ROTATION
+					vec3 receiverProjection = mat3(customShadowMatrixSSBO) * receiverPlayerPos + customShadowMatrixSSBO[3].xyz;
+				#else
+					vec3 receiverProjection = mat3(shadowModelView) * receiverPlayerPos + shadowModelView[3].xyz;
+				#endif
+				receiverProjection = diagonal3_old(shadowProjection) * receiverProjection + shadowProjection[3].xyz;
+				#ifdef DISTORT_SHADOWMAP
+					receiverProjection.xy *= calcDistort(receiverProjection.xy);
+				#endif
+			#else
+				vec4 receiverClip = customShadowPerspectiveSSBO * customShadowMatrixSSBO * (gbufferModelViewInverse * vec4(viewPos, 1.0));
+				vec3 receiverProjection = receiverClip.xyz / receiverClip.w;
+			#endif
+			receiverProjection = receiverProjection * vec3(0.5, 0.5, 0.5 / 6.0) + 0.5;
+			vec3 receiverDx = dFdx(receiverProjection);
+			vec3 receiverDy = dFdy(receiverProjection);
+			vec3 receiverWorldDx = dFdx(feetPlayerPos);
+			vec3 receiverWorldDy = dFdy(feetPlayerPos);
+			float receiverDet = receiverDx.x * receiverDy.y - receiverDx.y * receiverDy.x;
+			vec2 receiverDepthGradient = vec2(0.0);
+			// Reject silhouettes, degenerate projections and implausible slopes.
+			if (abs(receiverDet) > 1e-12 && max(length(receiverWorldDx), length(receiverWorldDy)) < 1.0) {
+				vec2 gradient = vec2(receiverDx.z * receiverDy.y - receiverDy.z * receiverDx.y,
+					receiverDy.z * receiverDx.x - receiverDx.z * receiverDy.x) / receiverDet;
+				if (!any(isnan(gradient)) && !any(isinf(gradient)) && max(abs(gradient.x), abs(gradient.y)) < 2.0)
+					receiverDepthGradient = gradient;
+			}
+		#else
+			vec2 receiverDepthGradient = vec2(0.0);
+		#endif
+
 
 		vec3 worldPos = feetPlayerPos + cameraPosition;
 
@@ -1444,14 +1483,14 @@ void main() {
 			float r = length(projectedShadowPosition.xy - vec2(0.5));
 
 			if (r < 0.5 && abs(projectedShadowPosition.z) < 1.0) {
-				shadowColor = ComputeShadowMap_COLOR(projectedShadowPosition, distortFactor, noise_2, filteredShadow.x, flatNormNdotL, shadowMapFalloff, DirectLightColor, ShadowAlpha, tintedSunlight, LabSSS > 0.0,Shadows);
+				shadowColor = ComputeShadowMap_COLOR(projectedShadowPosition, receiverDepthGradient, distortFactor, noise_2, filteredShadow.x, flatNormNdotL, shadowMapFalloff, DirectLightColor, ShadowAlpha, tintedSunlight, LabSSS > 0.0,Shadows);
 				shadowColor *= smoothstep(0.5, 0.25, r);
 			} else {
 				shadowColor = vec3(0.0);
 			}
 
 		#else
-			shadowColor = ComputeShadowMap_COLOR(projectedShadowPosition, distortFactor, noise_2, filteredShadow.x, flatNormNdotL, shadowMapFalloff, DirectLightColor, ShadowAlpha, tintedSunlight, LabSSS > 0.0,Shadows);
+			shadowColor = ComputeShadowMap_COLOR(projectedShadowPosition, receiverDepthGradient, distortFactor, noise_2, filteredShadow.x, flatNormNdotL, shadowMapFalloff, DirectLightColor, ShadowAlpha, tintedSunlight, LabSSS > 0.0,Shadows);
 		#endif
 		
 		// transition to fallback lightmap shadow mask.
@@ -1547,6 +1586,7 @@ void main() {
 
 		#if defined OVERWORLD_SHADER
 			float skylight = 1.0;
+			vec3 ambientFloor = MinimumLightColor;
 		
 			#if indirect_effect == VANILLA_AO || indirect_effect == SSAO_FILTERED || indirect_effect == SSAO_HQ || indirect_effect == GTAO
 
@@ -1586,14 +1626,19 @@ void main() {
 						#endif
 					);
 					#ifdef ECLIPSE_RTGI_WORLD
-						// Replace the corresponding share of the lightmap sky with the traced
-						// sky in the diffuse sample. Keep minimum light in doIndirectLighting.
-						if (SpecularTex.g <= 229.5 / 255.0)
-							skylight *= 1.0 - worldSkyWeight * min(RTGI_STRENGTH, 0.8) * rtgiWeight;
+						if (SpecularTex.g <= 229.5 / 255.0) {
+							float shelter = 1.0 - smoothstep(0.10, 0.72, lightmap.y);
+							float skyReplacement = worldSkyWeight * rtgiWeight
+								* min(RTGI_STRENGTH * mix(1.0, 1.25, shelter), 1.0);
+							skylight *= 1.0 - skyReplacement;
+							// Keep a small readability floor, with traced light
+							// providing most of the illumination in enclosed spaces.
+							ambientFloor *= 1.0 - 0.55 * shelter * skyReplacement * (1.0 - nightVision);
+						}
 					#endif
 				}
 			#endif
-			Indirect_lighting += doIndirectLighting(AmbientLightColor * skylight, MinimumLightColor, lightmap.y);
+			Indirect_lighting += doIndirectLighting(AmbientLightColor * skylight, ambientFloor, lightmap.y);
 
 			#if defined PH_ENABLE_GI && defined PHOTONICS && defined ENABLE_PHOTONICS_GI
 				#if defined DISTANT_HORIZONS || defined VOXY

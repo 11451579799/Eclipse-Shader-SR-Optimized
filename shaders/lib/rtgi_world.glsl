@@ -144,7 +144,9 @@
 		id = imageLoad(imgVoxelMask, voxel).r;
 		return rtgiFullVoxel(id) || (id >= BLOCK_DOOR_N && id <= BLOCK_DOOR_W)
 			|| id == BLOCK_SLAB_TOP || id == BLOCK_SLAB_BOTTOM
-			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W);
+			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W)
+			|| (id >= 22u && id <= 37u)
+			|| (id >= BLOCK_GATE_CLOSED_NS && id <= BLOCK_GATE_OPEN_EW);
 	}
 
 	vec3 rtgiDirectIrradiance(vec3 surface, vec3 normal) {
@@ -175,7 +177,9 @@
 			float openness = (pow(skylight, 15.0) * 2.0 + skylight * skylight) / 3.0;
 			directLight += rtgiSkyRadiance() * ((1.0 - freshness) * openness * (0.5 + 0.5 * hit.normal.y));
 		}
-		return albedo * (directLight + bounce * 0.90);
+		// Let the material absorb light at each relay. Bound feedback on
+		// near-white textures so the approximate cache cannot trap energy.
+		return albedo * directLight + min(albedo, vec3(0.95)) * bounce;
 	}
 
 	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting) {

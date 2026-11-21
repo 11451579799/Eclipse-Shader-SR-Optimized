@@ -40,13 +40,15 @@ void main() {
 			vec2 ij = R2_samples((frameCounter%2000)*maxITexp+i);
 			vec2 tc = 0.5 + (ij-0.5) * 0.7;
 			vec3 sp = texture(colortex6, tc/16. * resScale+vec2(0.375*resScale.x+4.5*texelSize.x,.0)).rgb;
-			avgExp += log(sqrt(luma(sp)));
-			avgB += log(min(dot(sp,vec3(0.07,0.22,0.71)),8e-2));
+			avgExp += log(sqrt(max(luma(sp), 1e-8)));
+			avgB += log(max(min(dot(sp,vec3(0.07,0.22,0.71)),8e-2), 1e-8));
 	}
 
 	avgExp = exp(avgExp/maxITexp);
 	avgB = exp(avgB/maxITexp);
 
+	// Keep the scene statistic stable, but derive the target from this frame's
+	// log-average so temporal smoothing happens in exposure space, not twice.
 	float avgBrightness = clamp(mix(avgExp,avgBrightnessSSBO,0.95),0.00003051757,65000.0);
 
 	float L = max(avgBrightness,1e-8);
@@ -54,14 +56,21 @@ void main() {
 	// float expFunc = 0.5+0.5*tanh(log(L));
 	
 	// float targetExposure = 1.0/log(L+1.05);
-	float targetExposure = (EXPOSURE_DARKENING * 0.35)/log(L+1.0 + EXPOSURE_BRIGHTENING * 0.05);
+	float targetExposure = (EXPOSURE_DARKENING * 0.35)/log(max(avgExp,1e-8)+1.0 + EXPOSURE_BRIGHTENING * 0.05);
 	// float targetExposure = 0.18/log2(L*2.5+1.045)*0.62; // choc original
 
 	float avgL2 = clamp(mix(avgB,avgL2SSBO,0.985),0.00003051757,65000.0);
 	float targetrodExposure = max(0.012/log2(avgL2+1.002)-0.1,0.0)*1.2;
 
 
-	float exposure = max(targetExposure*EXPOSURE_MULTIPLIER, 0.0);
+	float targetExposureValue = max(targetExposure*EXPOSURE_MULTIPLIER, 1e-8);
+	// frameTime is seconds. Clamp pauses/stalls and adapt multiplicatively so
+	// the same speed feels consistent across frame rates in both directions.
+	float dt = clamp(frameTime, 0.0, 0.1);
+	float exposureAlpha = 1.0 - exp(-max(Exposure_Speed, 0.0) * dt * 4.0);
+	if (frameCounter < 2) exposureAlpha = 1.0;
+	float previousExposure = max(exposureSSBO, 1e-8);
+	float exposure = exp(mix(log(previousExposure), log(targetExposureValue), exposureAlpha));
 
 	float currCenterDepth = ld(texture(depthtex2, vec2(0.5)*RENDER_SCALE).r);
 	float centerDepth = mix(sqrt(rodExposureDepthSSBO.y/65000.0), currCenterDepth, clamp(DoF_Adaptation_Speed*exp(-0.016/frameTime+1.0)/(6.0+currCenterDepth*far),0.0,1.0));

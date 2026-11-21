@@ -502,8 +502,12 @@ void main() {
 	float dist = length(playerpos);
 
 	float falloff = clamp(2.0 * (1.0 - dist / MAX_OCCLUSION_DISTANCE), 0.0, 1.0);
-	float grazingFade = smoothstep(0.015, 0.085, -viewVector.z);
-	float pomDepth = POM_DEPTH * falloff * falloff * grazingFade;
+	#if POM_MODE == 2
+		float grazingFade = smoothstep(0.015, 0.085, -viewVector.z);
+		float pomDepth = POM_DEPTH * falloff * falloff * grazingFade;
+	#else
+		float pomDepth = POM_DEPTH * falloff * falloff;
+	#endif
 
 	#if defined DEPTH_WRITE_POM
 		gl_FragDepth = gl_FragCoord.z;
@@ -516,7 +520,8 @@ void main() {
 	#endif
 	{
 		float depthmap = readNormal(data_in.texcoord.st).a;
-		if (depthmap < 0.9999 && depthmap > 0.00001) {
+		if (viewVector.z < 0.0 && depthmap < 0.9999 && depthmap > 0.00001) {
+			#if POM_MODE == 2
 			#ifdef Adaptive_Step_length
 				float grazing = 1.0 - smoothstep(0.08, 0.85, -viewVector.z);
 				int layers = int(ceil(float(MAX_OCCLUSION_POINTS) * mix(0.4, 1.0, grazing)));
@@ -543,7 +548,29 @@ void main() {
 			#if defined POM_OFFSET_SHADOW_BIAS
 				saveDepth = falloff * falloff * grazingFade * min(sampleStep, 1.0) * MAX_OCCLUSION_POINTS_DIV;
 			#endif
-	
+			#else
+				float noise = BN;
+				#ifdef Adaptive_Step_length
+					depthmap = clamp(1.0 - depthmap * depthmap, 0.1, 1.0);
+					vec3 interval = (viewVector / -viewVector.z * MAX_OCCLUSION_POINTS_DIV * pomDepth) * depthmap;
+				#else
+					vec3 interval = viewVector / -viewVector.z * MAX_OCCLUSION_POINTS_DIV * pomDepth;
+				#endif
+				vec3 coord = vec3(data_in.texcoord.st, 1.0) + interval * noise;
+				float sampleStep = noise;
+				for (int loopCount = 0; (loopCount < MAX_OCCLUSION_POINTS) && (1.0 - pomDepth + pomDepth * readNormal(coord.st).a) < coord.p && coord.p >= 0.0; ++loopCount) {
+					coord += interval;
+					sampleStep += 1.0;
+				}
+				#if defined POM_OFFSET_SHADOW_BIAS
+					#ifdef Adaptive_Step_length
+						saveDepth += clamp(MAX_OCCLUSION_POINTS_DIV * depthmap - 0.0001, 0.0, 1.0);
+					#else
+						saveDepth += clamp(MAX_OCCLUSION_POINTS_DIV - 0.0001, 0.0, 1.0);
+					#endif
+				#endif
+			#endif
+
 			if (coord.t < mincoord) {
 				if (readTexture(vec2(coord.s,mincoord)).a == 0.0) {
 					coord.t = mincoord;
@@ -551,7 +578,11 @@ void main() {
 				}
 			}
 			
-			adjustedTexCoord = fract(coord.st) * data_in.texcoordam.pq + data_in.texcoordam.st;
+			#if POM_MODE == 2
+				adjustedTexCoord = fract(coord.st) * data_in.texcoordam.pq + data_in.texcoordam.st;
+			#else
+				adjustedTexCoord = mix(fract(coord.st) * data_in.texcoordam.pq + data_in.texcoordam.st, adjustedTexCoord, max(dist - MIX_OCCLUSION_DISTANCE, 0.0) / (MAX_OCCLUSION_DISTANCE - MIX_OCCLUSION_DISTANCE));
+			#endif
 
 			#if defined DEPTH_WRITE_POM
 				vec3 truePos = fragpos + sampleStep * (inverseMatrix(tbnMatrix) * interval);

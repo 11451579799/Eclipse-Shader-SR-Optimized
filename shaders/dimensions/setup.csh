@@ -976,6 +976,10 @@ void main() {
             case BLOCK_LPV_IGNORE:
                 mixWeight = 1.00;
                 break;
+            case BLOCK_GATE_CLOSED_NS:
+            case BLOCK_GATE_CLOSED_EW:
+            case BLOCK_GATE_OPEN_NS:
+            case BLOCK_GATE_OPEN_EW:
             case BLOCK_LPV_MIN:
                 mixWeight = 0.75;
                 break;

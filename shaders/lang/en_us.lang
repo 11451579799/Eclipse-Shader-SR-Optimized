@@ -1340,3 +1340,9 @@ option.DoF_Adaptation_Speed.comment = §bWhat is this?§r This controls how quic
 option.FAR_BLUR_ONLY.comment = §bWhat is this?§r make it such that it cannot do an unfocus blur on objects near you, only objects far away.
 option.REMOVE_HAND_BLUR.comment = §bWhat is this?§r remove all blurring on your hand.
 option.DOF_DISPERSION_MULT.comment = §bWhat is this?§r This adds a color offset for red and blue, for a cool effect.
+
+    option.POM_MODE = Parallax Style
+    value.POM_MODE.0 = Off
+    value.POM_MODE.1 = Sharp (Original)
+    value.POM_MODE.2 = Smooth (64x+ PBR)
+    option.POM_MODE.comment = Select Off, Sharp, or Smooth. Smooth is intended for 64x and higher PBR resource packs.

@@ -72,6 +72,41 @@ void rtgiIntersectBox(vec3 origin, vec3 invDirection, bvec3 parallel, vec3 lo, v
 
 bool rtgiPartialShape(uint id, vec3 origin, vec3 invDirection, bvec3 parallel,
 	inout float nearest, inout int hitAxis) {
+	if (id >= 22u && id <= 37u) {
+		// IDs follow block.properties, not binary connection order: N E S W.
+		const uint connections[16] = uint[16](0u, 1u, 2u, 4u, 8u, 5u, 10u, 3u,
+			9u, 6u, 12u, 11u, 7u, 14u, 13u, 15u);
+		uint arms = connections[id - 22u];
+		rtgiIntersectBox(origin, invDirection, parallel, vec3(0.375, 0.0, 0.375),
+			vec3(0.625, 1.0, 0.625), nearest, hitAxis);
+		// Two narrow rails with the same bounds as the vanilla fence model.
+		for (int rail = 0; rail < 2; ++rail) {
+			float y = rail == 0 ? 0.375 : 0.75;
+			if ((arms & 1u) != 0u) rtgiIntersectBox(origin, invDirection, parallel, vec3(0.4375, y, 0.0), vec3(0.5625, y + 0.1875, 0.375), nearest, hitAxis);
+			if ((arms & 2u) != 0u) rtgiIntersectBox(origin, invDirection, parallel, vec3(0.625, y, 0.4375), vec3(1.0, y + 0.1875, 0.5625), nearest, hitAxis);
+			if ((arms & 4u) != 0u) rtgiIntersectBox(origin, invDirection, parallel, vec3(0.4375, y, 0.625), vec3(0.5625, y + 0.1875, 1.0), nearest, hitAxis);
+			if ((arms & 8u) != 0u) rtgiIntersectBox(origin, invDirection, parallel, vec3(0.0, y, 0.4375), vec3(0.375, y + 0.1875, 0.5625), nearest, hitAxis);
+		}
+		return true;
+	}
+	if (id >= BLOCK_GATE_CLOSED_NS && id <= BLOCK_GATE_OPEN_EW) {
+		bool ns = id == BLOCK_GATE_CLOSED_NS || id == BLOCK_GATE_OPEN_NS;
+		bool open = id >= BLOCK_GATE_OPEN_NS;
+		// A closed gate spans its opening; opening pivots each half to its edge.
+		if (!open) {
+			vec3 lo = ns ? vec3(0.0, 0.375, 0.375) : vec3(0.375, 0.375, 0.0);
+			vec3 hi = ns ? vec3(1.0, 0.9375, 0.625) : vec3(0.625, 0.9375, 1.0);
+			rtgiIntersectBox(origin, invDirection, parallel, lo, hi, nearest, hitAxis);
+		} else {
+			vec3 lo = vec3(0.0, 0.375, 0.0);
+			vec3 hi = ns ? vec3(0.1875, 0.9375, 1.0) : vec3(1.0, 0.9375, 0.1875);
+			rtgiIntersectBox(origin, invDirection, parallel, lo, hi, nearest, hitAxis);
+			lo = ns ? vec3(0.8125, 0.375, 0.0) : vec3(0.0, 0.375, 0.8125);
+			hi = vec3(1.0, 0.9375, 1.0);
+			rtgiIntersectBox(origin, invDirection, parallel, lo, hi, nearest, hitAxis);
+		}
+		return true;
+	}
 	if (id >= BLOCK_STAIRS_BOTTOM_N && id <= BLOCK_STAIRS_TOP_OUTER_S_W) {
 		// The second layer of each stair is the union of up to four half-block columns.
 		const uint quadrants[12] = uint[12](3u, 10u, 12u, 5u, 14u, 13u, 7u, 11u, 1u, 2u, 8u, 4u);

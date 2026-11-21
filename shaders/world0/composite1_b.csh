@@ -49,6 +49,7 @@ void main() {
 	// the near filter so it stays attached to the receiving surface.
 	float centerLuma = dot(center.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float centerWeight = mix(1.5, 3.5, smoothstep(0.04, 0.25, centerLuma));
+	centerWeight *= mix(0.5, 1.0, smoothstep(1.0, 12.0, abs(surface.z)));
 	vec3 total = center.rgb * centerWeight;
 	float weightSum = centerWeight;
 	const ivec2 offsets[8] = ivec2[8](ivec2(4, 0), ivec2(-4, 0), ivec2(0, 4), ivec2(0, -4),
@@ -63,7 +64,8 @@ void main() {
 		float plane = 1.0 - rtgiDepthError(surface.w, geometry.w, slope, offset) / tolerance;
 		float alignment = dot(normal, rtgiDecodeNormal(geometry.xy));
 		if (plane <= 0.0 || alignment < 0.93) continue;
-		float weight = plane * plane * alignment;
+		float historyConfidence = mix(0.5, 1.0, smoothstep(1.0, 12.0, abs(geometry.z)));
+		float weight = plane * plane * alignment * historyConfidence;
 		total += imageLoad(rtgiLight, tap).rgb * weight;
 		weightSum += weight;
 	}
