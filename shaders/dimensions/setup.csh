@@ -1024,6 +1024,23 @@ void main() {
                 mixWeight = 0.8;
                 break;
 
+            case BLOCK_IRON_DOOR_TOP_N:
+                mixMask = BuildLpvMask(0u, 1u, 1u, 1u, 1u, 1u);
+                mixWeight = 0.8;
+                break;
+            case BLOCK_IRON_DOOR_TOP_E:
+                mixMask = BuildLpvMask(1u, 0u, 1u, 1u, 1u, 1u);
+                mixWeight = 0.8;
+                break;
+            case BLOCK_IRON_DOOR_TOP_S:
+                mixMask = BuildLpvMask(1u, 1u, 0u, 1u, 1u, 1u);
+                mixWeight = 0.8;
+                break;
+            case BLOCK_IRON_DOOR_TOP_W:
+                mixMask = BuildLpvMask(1u, 1u, 1u, 0u, 1u, 1u);
+                mixWeight = 0.8;
+                break;
+
             case BLOCK_PRESSURE_PLATE:
                 mixMask = BuildLpvMask(1u, 1u, 1u, 1u, 1u, 0u);
                 mixWeight = 0.9;

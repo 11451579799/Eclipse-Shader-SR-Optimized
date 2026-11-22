@@ -1631,9 +1631,9 @@ void main() {
 							float skyReplacement = worldSkyWeight * rtgiWeight
 								* min(RTGI_STRENGTH * mix(1.0, 1.25, shelter), 1.0);
 							skylight *= 1.0 - skyReplacement;
-							// Keep a small readability floor, with traced light
-							// providing most of the illumination in enclosed spaces.
-							ambientFloor *= 1.0 - 0.55 * shelter * skyReplacement * (1.0 - nightVision);
+							// The minimum light is a fallback where world transport has
+							// incomplete coverage. Preserve the night-vision contribution.
+							ambientFloor *= 1.0 - shelter * skyReplacement * (1.0 - nightVision);
 						}
 					#endif
 				}
@@ -1877,7 +1877,14 @@ void main() {
 
 			#if defined DEFERRED_SPECULAR && defined DENOISED_REFLECTIONS
 			gl_FragData[1] = reflections;
-			gl_FragData[2].rgb = DirectLightColor*shadowColor*shadowColor*SunReflectionAlpha;
+			#if defined ECLIPSE_RTGI_ACTIVE && defined ECLIPSE_RTGI_WORLD
+				// The direct sun is a separate lobe: use the receiver's shadow transmission
+				// once, independent of the environment reflection's hit confidence.
+				gl_FragData[2].rgb = rtgiReceiver ? DirectLightColor * shadowColor
+					: DirectLightColor * shadowColor * shadowColor * SunReflectionAlpha;
+			#else
+				gl_FragData[2].rgb = DirectLightColor * shadowColor * shadowColor * SunReflectionAlpha;
+			#endif
 			gl_FragData[3] = vec4(encodeNormal(specularNormal), SpecularTex.r, SpecularTex.g);
 			#endif
 		#endif

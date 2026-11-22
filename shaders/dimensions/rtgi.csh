@@ -149,6 +149,62 @@ vec4 rtgiGatherHistory(RtgiHistoryFootprint footprint, ivec2 tileSize, bool even
 	return lighting / max(1e-5, weightSum);
 }
 
+#ifdef ECLIPSE_RTGI_WORLD
+// Screen radiance replaces only the analytic direct term at the same full-block face.
+// Each tile is validated in the current frame and against its previous-frame geometry.
+vec4 rtgiVoxelScreenDirect(RtgiVoxelHit voxelHit, vec3 hitPosition, ivec2 renderSize,
+	ivec2 tileSize, vec2 viewport, vec2 jitter, bool evenFrame) {
+	if (!rtgiFullVoxel(voxelHit.blockId) || rtgiSolidEmitter(voxelHit.blockId)) return vec4(0.0);
+	vec3 playerHit = hitPosition - rtgiVoxelOffset();
+	vec4 clip = gbufferProjection * gbufferModelView * vec4(playerHit, 1.0);
+	if (clip.w <= 0.0) return vec4(0.0);
+	vec2 raster = (clip.xy / clip.w * 0.5 + 0.5) * viewport + jitter;
+	float stride = float(rtgiSampleStride());
+	if (any(lessThan(raster, vec2(stride))) || any(greaterThanEqual(raster, vec2(renderSize) - stride))) return vec4(0.0);
+	// Choose the closest tile once; smoothly reduce trust toward tile boundaries.
+	ivec2 tile = ivec2(floor(raster / stride));
+	if (!rtgiContains(tile, tileSize)) return vec4(0.0);
+	ivec2 pixel = rtgiTilePixel(tile, renderSize);
+	vec2 tileOffset = abs(raster - (vec2(pixel) + 0.5)) / stride;
+	float tileWeight = 1.0 - smoothstep(0.32, 0.71, length(tileOffset));
+	if (tileWeight <= 0.0) return vec4(0.0);
+	RtgiSurface candidate;
+	if (!rtgiReadSurface(pixel, texelFetch(depthtex1, pixel, 0).r, 1.0 / viewport, jitter, candidate)) return vec4(0.0);
+	if (dot(candidate.flatNormal, voxelHit.normal) < 0.98) return vec4(0.0);
+	vec3 point = (gbufferModelViewInverse * vec4(candidate.viewPosition, 1.0)).xyz + rtgiVoxelOffset();
+	ivec3 receiverVoxel; uint receiverId;
+	if (!rtgiVoxelReceiver(point, candidate.flatNormal, receiverVoxel, receiverId)
+		|| any(notEqual(receiverVoxel, voxelHit.voxel)) || receiverId != voxelHit.blockId) return vec4(0.0);
+	vec3 separation = point - hitPosition;
+	if (abs(dot(separation, voxelHit.normal)) > 0.06 || length(separation) > 0.35) return vec4(0.0);
+	// colortex8 stores (F0, flat-normal Y) in y and (emission, AO) in w.
+	vec4 materialData = texelFetch(colortex8, pixel, 0);
+	float f0 = decodeVec2(materialData.y).x;
+	float emission = decodeVec2(materialData.w).x;
+	if (f0 > 229.5 / 255.0 || (emission > 0.5 / 255.0 && emission < 254.5 / 255.0)) return vec4(0.0);
+	RtgiHistoryFootprint previous;
+	if (!rtgiReproject(candidate, viewport, previous)) return vec4(0.0);
+	ivec2 oldTile = ivec2(floor(previous.pixel / stride));
+	if (!rtgiContains(oldTile, tileSize)) return vec4(0.0);
+	vec4 oldGeometry;
+	float valid = rtgiHistorySurface(oldTile, evenFrame, candidate.flatNormal, previous, oldGeometry);
+	if (valid <= 0.0 || dot(rtgiDecodeNormal(oldGeometry.xy), voxelHit.normal) < 0.98) return vec4(0.0);
+	vec2 oldOffset = vec2(rtgiTilePixel(oldTile, rtgiPreviousRenderSize)) + 0.5 - previous.pixel;
+	float error = rtgiDepthError(previous.depth, oldGeometry.w, previous.slope, oldOffset);
+	if (error > 0.06 || length(oldOffset) > stride * 0.6) return vec4(0.0);
+	vec4 direct = imageLoad(rtgiLight, oldTile);
+	if (direct.a <= 0.0) return vec4(0.0);
+	float motion = length(vec2(pixel) + 0.5 - jitter - previous.pixel + rtgiPreviousJitter);
+	float weight = valid * tileWeight * (1.0 - smoothstep(0.10, 0.35, length(separation)))
+		* (1.0 - smoothstep(1.0, 6.0, motion));
+	// Source light is linear scene radiance, not the exposure-adjusted display color.
+	// Reduce trust when the sun or weather changes within the accepted history window.
+	weight *= (1.0 - smoothstep(0.005, 0.04, abs(sunElevation - rtgiPreviousSun)))
+		* (1.0 - smoothstep(0.02, 0.12, abs(rainStrength - rtgiPreviousRain)));
+	return vec4(max(direct.rgb, vec3(0.0)), 0.65 * weight);
+}
+#endif
+
 vec2 rtgiSamplePhase(ivec2 tile) {
 	// Composite colortex6 exposes the pack's two-channel blue-noise texture.
 	ivec2 noisePixel = tile % textureSize(colortex6, 0);
@@ -169,6 +225,29 @@ vec3 rtgiDirection(ivec2 tile, vec3 normal) {
 	return tangent * (radius * cos(phi)) + bitangent * (radius * sin(phi))
 		+ normal * sqrt(1.0 - samplePoint.x);
 }
+
+#ifdef ECLIPSE_RTGI_WORLD
+bool rtgiPrimaryGuide(ivec3 voxel, uint blockId, vec3 flatNormal, float skylight, out vec3 guide) {
+	if (skylight >= 0.75 || !rtgiFullVoxel(blockId) || rtgiSolidEmitter(blockId)) return false;
+	uint material = rtgiVoxelMaterialAt(voxel, flatNormal);
+	if (material == 0u) return false;
+	ivec4 key = rtgiFaceKey(voxel, flatNormal, blockId);
+	uint slot = rtgiFaceHash(key) & (rtgiFaceCacheSize - 1u);
+	RtgiFaceEntry entry = rtgiFaces[slot];
+	uint age = uint(frameCounter) + 1u - entry.data.x;
+	if (entry.data.x == 0u || age > 16u || entry.data.w != material || any(notEqual(entry.key, key))) return false;
+	uint encodedGuide = rtgiFaceGuides[slot];
+	if (unpackHalf2x16(encodedGuide).y <= 0.0001) return false;
+	guide = rtgiUnpackGuide(encodedGuide);
+	return dot(guide, flatNormal) > 0.0;
+}
+
+uint rtgiPrimaryRandom(uint v) {
+	v ^= v >> 16u; v *= 0x7feb352du;
+	v ^= v >> 15u; v *= 0x846ca68bu;
+	return v ^ (v >> 16u);
+}
+#endif
 
 #ifdef ECLIPSE_RTGI_SOFT_SHADOWS
 	void rtgiStoreDirect(ivec2 tile, bool evenFrame, uvec4 direct) {
@@ -346,17 +425,45 @@ void main() {
 
 	RtgiSurface hit;
 	float hitDistance;
-	vec3 direction = rtgiDirection(tile, normalize(mix(historyNormal, surface.worldNormal, 0.45)));
+	vec3 sampleNormal = normalize(mix(historyNormal, surface.worldNormal, 0.45));
+	vec3 direction = rtgiDirection(tile, sampleNormal);
+	float proposalWeight = 1.0;
+	bool guidedProposal = false;
+	#ifdef ECLIPSE_RTGI_WORLD
+		vec3 guide;
+		// Restrict to near-flat shading normals so the geometric hemisphere remains reliable.
+		if (samplesWorldSky && dot(sampleNormal, surface.flatNormal) > 0.995
+			&& rtgiPrimaryGuide(receiverVoxel, receiverId, surface.flatNormal, surface.skylight, guide)) {
+			guidedProposal = true;
+			uint seed = uint(tile.x) * 0x8da6b343u ^ uint(tile.y) * 0xd8163841u ^ uint(frameCounter) * 0xcb1ab31fu;
+			float selectGuide = float(rtgiPrimaryRandom(seed) & 0x00ffffffu) * (1.0 / 16777216.0);
+			if (selectGuide < 0.25) direction = rtgiDirection(tile, guide);
+			float cosine = max(dot(sampleNormal, direction), 0.0);
+			float mixture = 0.75 * cosine + 0.25 * max(dot(guide, direction), 0.0);
+			proposalWeight = mixture > 0.0 ? cosine / mixture : 0.0;
+			if (dot(direction, surface.flatNormal) <= 0.0) proposalWeight = 0.0;
+		}
+	#endif
 	vec4 sampleLighting = vec4(0.0);
 	bool needsScreen = true;
 	#ifdef ECLIPSE_RTGI_WORLD
 		if (samplesWorldSky) {
 			// A shading normal can send a sample below the actual block face.
 			// Redirect it within the geometric hemisphere for both GI and contact rays.
-			if (dot(direction, surface.flatNormal) <= 0.0)
+			if (!guidedProposal && dot(direction, surface.flatNormal) <= 0.0)
 				direction = reflect(direction, surface.flatNormal);
-			needsScreen = rtgiWorldBounce(position, surface.flatNormal, direction, surface.skylight, sampleLighting)
-				== rtgiRayUnknown;
+			RtgiVoxelHit voxelHit;
+			vec3 transmission, voxelDirect;
+			float rangeWeight;
+			int worldResult = rtgiWorldBounce(position, surface.flatNormal, direction, surface.skylight,
+				sampleLighting, voxelHit, transmission, voxelDirect, rangeWeight);
+			needsScreen = worldResult == rtgiRayUnknown;
+			if (worldResult == rtgiRayHit && historyAvailable
+				&& max(voxelDirect.r, max(voxelDirect.g, voxelDirect.b)) >= 0.7) {
+				vec3 hitPosition = position + surface.flatNormal * rtgiRayBias + direction * voxelHit.distance;
+				vec4 screenDirect = rtgiVoxelScreenDirect(voxelHit, hitPosition, renderSize, tileSize, viewport, jitter, evenFrame);
+				sampleLighting.rgb += transmission * rangeWeight * (screenDirect.rgb - voxelDirect) * screenDirect.a;
+			}
 			if (needsScreen) sampleLighting.rgb = rtgiEscapedSkylight(direction, surface.skylight);
 		}
 	#endif
@@ -388,6 +495,12 @@ void main() {
 		#endif
 	}
 
+	// Reweight both light and contact coverage for the mixture, bounding the latter.
+	if (guidedProposal) {
+		sampleLighting.rgb *= proposalWeight;
+		sampleLighting.a = clamp(sampleLighting.a * proposalWeight, 0.0, 1.0);
+	}
+
 	#ifdef ECLIPSE_RTGI_WORLD
 		if (historyAvailable && samplesWorldSky && sampleCount < 5.0 && surface.skylight < 0.75) {
 			uint material = rtgiVoxelMaterialAt(receiverVoxel, surface.flatNormal);
@@ -409,6 +522,8 @@ void main() {
 	vec4 geometry = vec4(rtgiEncodeNormal(historyNormal), samplesWorldSky ? -sampleCount : sampleCount, -surface.viewPosition.z);
 	// Keep contact occlusion responsive when nearby geometry changes.
 	vec2 sampleWeight = 1.0 / vec2(sampleCount, min(sampleCount, 10.0));
+	// A proposal below the geometric face carries no contact observation.
+	if (guidedProposal && proposalWeight <= 0.0) sampleWeight.y = 0.0;
 	vec4 lighting = mix(previousLighting, sampleLighting, sampleWeight.xxxy);
 	rtgiStoreTile(tile, evenFrame, geometry, lighting);
 }

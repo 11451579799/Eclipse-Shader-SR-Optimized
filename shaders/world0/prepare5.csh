@@ -10,6 +10,7 @@ layout(rgba32ui) uniform writeonly uimage3D rtgiEmitterCells;
 uniform vec3 cameraPosition;
 uniform usampler1D texBlockData;
 
+#include "/lib/blocks.glsl"
 #include "/lib/voxel_common.glsl"
 #include "/lib/rtgi_light_grid.glsl"
 
@@ -23,6 +24,7 @@ shared uint emitterEntries[8];
 shared uint emitterOctants[8];
 shared uint untrackedAxes;
 shared uint untrackedRange;
+shared uint portalIndex;
 
 void main() {
 	ivec3 cell = ivec3(gl_WorkGroupID);
@@ -34,6 +36,7 @@ void main() {
 	if (dot(gap, gap) >= radius * radius) {
 		if (gl_LocalInvocationIndex == 0u) {
 			imageStore(rtgiEmitterCells, cell, uvec4(0u));
+			imageStore(rtgiEmitterCells, boundsCell, uvec4(0u));
 		}
 		return;
 	}
@@ -42,6 +45,7 @@ void main() {
 		emitterCount = 0u;
 		untrackedAxes = 0u;
 		untrackedRange = 0u;
+		portalIndex = 0xffffffffu;
 	}
 	if (gl_LocalInvocationIndex < 8u) {
 		emitterEntries[gl_LocalInvocationIndex] = 0u;
@@ -58,6 +62,7 @@ void main() {
 		ivec3 voxel = base + offset;
 		if (any(lessThan(voxel, ivec3(0))) || any(greaterThanEqual(voxel, ivec3(VoxelSize)))) continue;
 		uint rawId = imageLoad(imgVoxelMask, voxel).r;
+		if (rawId >= BLOCK_IRON_DOOR_TOP_N && rawId <= BLOCK_IRON_DOOR_TOP_W) atomicMin(portalIndex, index);
 		if (rawId == 0u || rawId == 1u) continue;
 		uint range = rawId >= 50000u ? uint(rtgiLightRange) : texelFetch(texBlockData, int(rawId % 2000u), 0).r >> 24u;
 		if (range == 0u) continue;
@@ -105,13 +110,16 @@ void main() {
 			entries[count / 2] |= (entry & 0x3fffu) << ((count % 2) * 15);
 			++count;
 		}
+		uvec4 bounds = uvec4(0u);
+		if (portalIndex != 0xffffffffu) bounds.z = portalIndex + 1u;
 		if (untrackedRange != 0u) {
 			uvec3 axes = (uvec3(untrackedAxes) >> uvec3(0u, 8u, 16u)) & 255u;
 			uint lo = rtgiPackLightPosition(findLSB(axes)) | (untrackedRange << 24u);
 			uint hi = rtgiPackLightPosition(findMSB(axes));
-			imageStore(rtgiEmitterCells, boundsCell, uvec4(lo, hi, 0u, 0u));
+			bounds.xy = uvec2(lo, hi);
 			entries.x |= rtgiLightRecordFlag;
 		}
+		imageStore(rtgiEmitterCells, boundsCell, bounds);
 		imageStore(rtgiEmitterCells, cell, entries);
 	}
 }

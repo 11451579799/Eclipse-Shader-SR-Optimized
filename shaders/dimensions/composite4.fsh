@@ -494,7 +494,13 @@ void blendAllFogTypes( inout vec3 color, inout float bloomyFogMult, vec4 volumet
         const float caveFactor = 0.0;
       #endif
 
-      color.rgb = mix(color.rgb + cavefogCol * caveDetection, cavefogCol, isSky ? skyhole * caveDetection * caveFactor: 0.0);
+      #ifdef ECLIPSE_RTGI_WORLD
+        // Keep the distant atmospheric transition without adding unlit haze to nearby geometry.
+        float caveFogDistance = isSky ? 1.0 : smoothstep(12.0, 32.0, linearDistance);
+      #else
+        const float caveFogDistance = 1.0;
+      #endif
+      color.rgb = mix(color.rgb + cavefogCol * caveDetection * caveFogDistance, cavefogCol, isSky ? skyhole * caveDetection * caveFactor: 0.0);
     }
   #endif
 

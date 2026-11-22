@@ -143,6 +143,7 @@
 		if (!rtgiVoxelContains(voxel)) return false;
 		id = imageLoad(imgVoxelMask, voxel).r;
 		return rtgiFullVoxel(id) || (id >= BLOCK_DOOR_N && id <= BLOCK_DOOR_W)
+			|| (id >= BLOCK_IRON_DOOR_TOP_N && id <= BLOCK_IRON_DOOR_TOP_W)
 			|| id == BLOCK_SLAB_TOP || id == BLOCK_SLAB_BOTTOM
 			|| (id >= BLOCK_TRAPDOOR_BOTTOM && id <= BLOCK_STAIRS_TOP_OUTER_S_W)
 			|| (id >= 22u && id <= 37u)
@@ -164,7 +165,7 @@
 		return light;
 	}
 
-	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface, bool useCachedDirect) {
+	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface, bool useCachedDirect, out vec3 directRadiance) {
 		uint material = rtgiVoxelMaterialAt(hit.voxel, hit.normal);
 		vec3 albedo = material != 0u ? toLinear(unpackUnorm4x8(material).rgb) : vec3(0.45);
 		vec3 directLight;
@@ -179,10 +180,17 @@
 		}
 		// Let the material absorb light at each relay. Bound feedback on
 		// near-white textures so the approximate cache cannot trap energy.
-		return albedo * directLight + min(albedo, vec3(0.95)) * bounce;
+		directRadiance = albedo * directLight;
+		return directRadiance + min(albedo, vec3(0.95)) * bounce;
 	}
 
-	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting) {
+	vec3 rtgiShadeVoxelHit(RtgiVoxelHit hit, vec3 surface, bool useCachedDirect) {
+		vec3 unusedDirect;
+		return rtgiShadeVoxelHit(hit, surface, useCachedDirect, unusedDirect);
+	}
+
+	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting,
+		out RtgiVoxelHit hit, out vec3 transmission, out vec3 directRadiance, out float rangeWeight) {
 		lighting = vec4(0.0);
 		if (dot(flatNormal, direction) <= 0.0) return rtgiRayMiss;
 		const float nearRange = 12.0;
@@ -190,8 +198,8 @@
 		// can provide most of the incident light through a narrow opening.
 		float maxDistance = mix(16.0, nearRange, smoothstep(0.25, 0.75, skylight));
 		vec3 origin = position + flatNormal * rtgiRayBias;
-		RtgiVoxelHit hit;
-		vec3 transmission;
+		directRadiance = vec3(0.0);
+		rangeWeight = 1.0;
 		int result = rtgiTraceVoxels(origin, direction, maxDistance, ivec3(-1), hit, transmission);
 		if (result != rtgiRayHit) {
 			if (result == rtgiRayMiss)
@@ -200,10 +208,18 @@
 		}
 
 		lighting.a = 1.0 - smoothstep(0.10, 2.0, hit.distance);
-		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance, true);
+		lighting.rgb = transmission * rtgiShadeVoxelHit(hit, origin + direction * hit.distance, true, directRadiance);
 		if (hit.distance > nearRange)
-			lighting.rgb *= 1.0 - smoothstep(max(nearRange, maxDistance - 2.0), maxDistance, hit.distance);
+			rangeWeight = 1.0 - smoothstep(max(nearRange, maxDistance - 2.0), maxDistance, hit.distance);
+		lighting.rgb *= rangeWeight;
 		return rtgiRayHit;
+	}
+
+	int rtgiWorldBounce(vec3 position, vec3 flatNormal, vec3 direction, float skylight, out vec4 lighting) {
+		RtgiVoxelHit hit;
+		vec3 transmission, directRadiance;
+		float rangeWeight;
+		return rtgiWorldBounce(position, flatNormal, direction, skylight, lighting, hit, transmission, directRadiance, rangeWeight);
 	}
 
 	#if defined RTGI_REFLECTIONS && !defined ECLIPSE_RTGI_TRACE

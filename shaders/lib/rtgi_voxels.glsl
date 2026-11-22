@@ -123,6 +123,42 @@ bool rtgiPartialShape(uint id, vec3 origin, vec3 invDirection, bvec3 parallel,
 		return true;
 	}
 
+	if (id >= BLOCK_IRON_DOOR_TOP_N && id <= BLOCK_IRON_DOOR_TOP_W) {
+		uint side = id - BLOCK_IRON_DOOR_TOP_N;
+		bool xWidth = side == 0u || side == 2u;
+		vec3 lo = vec3(0.0);
+		vec3 hi = vec3(1.0);
+		const float thickness = 3.0 / 16.0;
+		if (side == 0u) lo.z = 1.0 - thickness;
+		if (side == 1u) hi.x = thickness;
+		if (side == 2u) hi.z = thickness;
+		if (side == 3u) lo.x = 1.0 - thickness;
+
+		// The vanilla/SPBR top texture has two 4x3 alpha cutouts. Keep the
+		// surrounding frame as six thin boxes so rays through the actual holes pass.
+		for (int strip = 0; strip < 3; ++strip) {
+			float u0 = strip == 0 ? 0.0 : (strip == 1 ? 7.0 / 16.0 : 13.0 / 16.0);
+			float u1 = strip == 0 ? 3.0 / 16.0 : (strip == 1 ? 9.0 / 16.0 : 1.0);
+			vec3 partLo = lo;
+			vec3 partHi = hi;
+			if (xWidth) { partLo.x = u0; partHi.x = u1; }
+			else { partLo.z = u0; partHi.z = u1; }
+			rtgiIntersectBox(origin, invDirection, parallel, partLo, partHi, nearest, hitAxis);
+		}
+		for (int band = 0; band < 3; ++band) {
+			float y0 = band == 0 ? 0.0 : (band == 1 ? 8.0 / 16.0 : 13.0 / 16.0);
+			float y1 = band == 0 ? 5.0 / 16.0 : (band == 1 ? 10.0 / 16.0 : 1.0);
+			vec3 partLo = lo;
+			vec3 partHi = hi;
+			partLo.y = y0;
+			partHi.y = y1;
+			if (xWidth) { partLo.x = 3.0 / 16.0; partHi.x = 13.0 / 16.0; }
+			else { partLo.z = 3.0 / 16.0; partHi.z = 13.0 / 16.0; }
+			rtgiIntersectBox(origin, invDirection, parallel, partLo, partHi, nearest, hitAxis);
+		}
+		return true;
+	}
+
 	vec3 lo = vec3(0.0);
 	vec3 hi = vec3(1.0);
 	const float thickness = 3.0 / 16.0;

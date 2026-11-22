@@ -21,6 +21,13 @@ struct RtgiFaceEntry {
 #endif
 
 #if !defined ECLIPSE_RTGI_RESET && !defined ECLIPSE_RTGI_CACHE_PUBLISH
+vec2 rtgiGuideSign(vec2 v) { return vec2(v.x < 0.0 ? -1.0 : 1.0, v.y < 0.0 ? -1.0 : 1.0); }
+vec3 rtgiUnpackGuide(uint guide) {
+	vec2 xy = unpackSnorm4x8(guide & 65535u).xy;
+	vec3 direction = vec3(xy, 1.0 - abs(xy.x) - abs(xy.y));
+	if (direction.z < 0.0) direction.xy = (1.0 - abs(direction.yx)) * rtgiGuideSign(direction.xy);
+	return normalize(direction);
+}
 ivec4 rtgiFaceKey(ivec3 voxel, vec3 normal, uint blockId) {
 	int axis = rtgiLargestAxis(abs(normal));
 	int face = 2 * axis + int(normal[axis] < 0.0);
