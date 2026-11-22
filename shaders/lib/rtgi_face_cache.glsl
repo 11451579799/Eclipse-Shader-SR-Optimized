@@ -35,7 +35,26 @@ ivec4 rtgiFaceKey(ivec3 voxel, vec3 normal, uint blockId) {
 	return ivec4(world, int(blockId) * 6 + face);
 }
 
+bool rtgiFaceMatches(ivec4 stored, ivec4 key) {
+	return all(equal(stored.xyz, key.xyz)) && (uint(stored.w) & 0x3fffu) == (uint(key.w) & 0x3fffu);
+}
+
+uint rtgiEncodePortal(ivec3 delta, uint side) {
+	if (any(lessThan(delta, ivec3(-16))) || any(greaterThan(delta, ivec3(15))) || side > 3u) return 0u;
+	uvec3 d = uvec3(delta + 16);
+	return 0x80000000u | (side << 29u) | (d.z << 24u) | (d.y << 19u) | (d.x << 14u);
+}
+
+bool rtgiDecodePortal(ivec4 key, ivec3 voxel, out ivec3 door, out uint side) {
+	uint bits = uint(key.w);
+	if ((bits & 0x80000000u) == 0u) return false;
+	side = (bits >> 29u) & 3u;
+	door = voxel + ivec3(int((bits >> 14u) & 31u), int((bits >> 19u) & 31u), int((bits >> 24u) & 31u)) - 16;
+	return true;
+}
+
 uint rtgiFaceHash(ivec4 key) {
+	key.w = int(uint(key.w) & 0x3fffu);
 	uvec4 k = uvec4(key) * uvec4(0x8da6b343u, 0xd8163841u, 0xcb1ab31fu, 0x165667b1u);
 	uint hash = k.x ^ k.y ^ k.z ^ k.w;
 	hash = (hash ^ (hash >> 16u)) * 0x7feb352du;
@@ -64,7 +83,7 @@ bool rtgiLoadFace(ivec4 key, uint material, out vec3 direct, out vec3 indirect, 
 	indirect = vec3(0.0);
 	freshness = 0.0;
 	if (entry.data.x == 0u || age > rtgiFaceCacheLifetime || entry.data.w != material
-		|| any(notEqual(entry.key, key))) return false;
+		|| !rtgiFaceMatches(entry.key, key)) return false;
 
 	freshness = 1.0 - smoothstep(24.0, float(rtgiFaceCacheLifetime), float(age));
 	indirect = rtgiUnpackIrradiance(entry.data.z) * freshness;

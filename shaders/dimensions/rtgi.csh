@@ -227,7 +227,14 @@ vec3 rtgiDirection(ivec2 tile, vec3 normal) {
 }
 
 #ifdef ECLIPSE_RTGI_WORLD
-bool rtgiPrimaryGuide(ivec3 voxel, uint blockId, vec3 flatNormal, float skylight, out vec3 guide) {
+#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+#include "/lib/rtgi_portals.glsl"
+#endif
+
+bool rtgiPrimaryProposals(ivec3 voxel, uint blockId, vec3 flatNormal, float skylight, vec3 point,
+	out vec3 guide, out bool hasGuide, out ivec3 door, out uint doorSide, out bool hasPortal) {
+	hasGuide = false; hasPortal = false;
+	guide = flatNormal; door = ivec3(0); doorSide = 0u;
 	if (skylight >= 0.75 || !rtgiFullVoxel(blockId) || rtgiSolidEmitter(blockId)) return false;
 	uint material = rtgiVoxelMaterialAt(voxel, flatNormal);
 	if (material == 0u) return false;
@@ -235,11 +242,22 @@ bool rtgiPrimaryGuide(ivec3 voxel, uint blockId, vec3 flatNormal, float skylight
 	uint slot = rtgiFaceHash(key) & (rtgiFaceCacheSize - 1u);
 	RtgiFaceEntry entry = rtgiFaces[slot];
 	uint age = uint(frameCounter) + 1u - entry.data.x;
-	if (entry.data.x == 0u || age > 16u || entry.data.w != material || any(notEqual(entry.key, key))) return false;
+	if (entry.data.x == 0u || age > 16u || entry.data.w != material || !rtgiFaceMatches(entry.key, key)) return false;
 	uint encodedGuide = rtgiFaceGuides[slot];
-	if (unpackHalf2x16(encodedGuide).y <= 0.0001) return false;
-	guide = rtgiUnpackGuide(encodedGuide);
-	return dot(guide, flatNormal) > 0.0;
+	if (unpackHalf2x16(encodedGuide).y > 0.0001) {
+		guide = rtgiUnpackGuide(encodedGuide);
+		hasGuide = dot(guide, flatNormal) > 0.0;
+	}
+	#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+		if (rtgiDecodePortal(entry.key, voxel, door, doorSide) && rtgiVoxelContains(door)
+			&& imageLoad(imgVoxelMask, door).r == uint(BLOCK_IRON_DOOR_TOP_N) + doorSide) {
+			vec3 center = rtgiPortalPoint(door, doorSide, vec2(0.25));
+			vec3 delta = center - point;
+			float distanceSquared = dot(delta, delta);
+			hasPortal = distanceSquared > 0.04 && distanceSquared < 64.0 && dot(delta, flatNormal) > 0.0;
+		}
+	#endif
+	return hasGuide || hasPortal;
 }
 
 uint rtgiPrimaryRandom(uint v) {
@@ -431,15 +449,31 @@ void main() {
 	bool guidedProposal = false;
 	#ifdef ECLIPSE_RTGI_WORLD
 		vec3 guide;
+		bool hasGuide, hasPortal;
+		ivec3 portalDoor;
+		uint portalSide;
+		vec3 rayOrigin = position + surface.flatNormal * rtgiRayBias;
 		// Restrict to near-flat shading normals so the geometric hemisphere remains reliable.
 		if (samplesWorldSky && dot(sampleNormal, surface.flatNormal) > 0.995
-			&& rtgiPrimaryGuide(receiverVoxel, receiverId, surface.flatNormal, surface.skylight, guide)) {
+			&& rtgiPrimaryProposals(receiverVoxel, receiverId, surface.flatNormal, surface.skylight,
+				rayOrigin, guide, hasGuide, portalDoor, portalSide, hasPortal)) {
 			guidedProposal = true;
+			float guideProbability = hasGuide ? 0.25 : 0.0;
+			float portalProbability = hasPortal ? 0.20 : 0.0;
+			float baseProbability = 1.0 - guideProbability - portalProbability;
 			uint seed = uint(tile.x) * 0x8da6b343u ^ uint(tile.y) * 0xd8163841u ^ uint(frameCounter) * 0xcb1ab31fu;
-			float selectGuide = float(rtgiPrimaryRandom(seed) & 0x00ffffffu) * (1.0 / 16777216.0);
-			if (selectGuide < 0.25) direction = rtgiDirection(tile, guide);
+			float proposalChoice = float(rtgiPrimaryRandom(seed) & 0x00ffffffu) * (1.0 / 16777216.0);
+			#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+				if (proposalChoice < portalProbability)
+					direction = normalize(rtgiPortalPoint(portalDoor, portalSide, rtgiSamplePair(tile)) - rayOrigin);
+				else
+			#endif
+			if (proposalChoice < portalProbability + guideProbability) direction = rtgiDirection(tile, guide);
 			float cosine = max(dot(sampleNormal, direction), 0.0);
-			float mixture = 0.75 * cosine + 0.25 * max(dot(guide, direction), 0.0);
+			float mixture = baseProbability * cosine + guideProbability * max(dot(guide, direction), 0.0);
+			#ifdef ECLIPSE_RTGI_BLOCK_SHADOWS
+				if (hasPortal) mixture += portalProbability * rtgiPortalPdf(rayOrigin, direction, portalDoor, portalSide);
+			#endif
 			proposalWeight = mixture > 0.0 ? cosine / mixture : 0.0;
 			if (dot(direction, surface.flatNormal) <= 0.0) proposalWeight = 0.0;
 		}
